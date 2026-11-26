@@ -125,6 +125,6 @@ export function createApp({ dataDir = process.env.DATA_DIR || path.join(here, '.
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
   const port = Number(process.env.PORT || 8787);
-  const { server } = createApp();
+  const { server } = createApp({ allowPrivate: process.env.ALLOW_PRIVATE === "1" }); // dev only
   server.listen(port, () => console.log(`agent-receipts listening on :${port}`));
 }

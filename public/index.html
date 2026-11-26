@@ -24,7 +24,7 @@ table{width:100%;border-collapse:collapse}td{padding:5px 4px;border-top:1px soli
 <button id="go">Get signed receipt</button><div id="out"></div></div>
 <div class="card"><h2>Recent receipts</h2><table id="recent"></table></div>
 </main><script>
-let key=localStorage.ar_key||'';const $=i=>document.getElementById(i);
+const q=new URLSearchParams(location.search);if(q.get('key'))localStorage.ar_key=q.get('key');let key=localStorage.ar_key||'';const $=i=>document.getElementById(i);
 async function j(p,o){const r=await fetch(p,o);return r.json()}
 async function refresh(){const i=await j('/v1/info');$('early').textContent=`Early program: ${i.early_program.taken}/${i.early_program.limit} taken, ${i.early_program.points_each} points each (credits for receipts, not a token).`;
 if(key){const m=await j('/v1/me',{headers:{authorization:'Bearer '+key}});if(m.id)$('acct').textContent=`${m.id} | free today: ${m.free_left_today} | points: ${m.points}`}

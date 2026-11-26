@@ -1,0 +1,12 @@
+{
+  "name": "agent-receipts",
+  "version": "0.1.0",
+  "description": "Independent post-action verification with signed receipts for AI agents.",
+  "type": "module",
+  "license": "MIT",
+  "scripts": {
+    "start": "node src/server.mjs",
+    "test": "node --test test/"
+  },
+  "engines": { "node": ">=20" }
+}

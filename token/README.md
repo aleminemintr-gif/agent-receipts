@@ -7,7 +7,7 @@ A fixed-supply SPL token meant for one use: paying for receipts and persistence 
 the same way prepaid credits work. It is not an investment, carries no promise of return, and this repo makes no price claim.
 
 ## What exists
-- `config.json`: proposed parameters (placeholders: the owner chooses name, symbol and supply).
+- `config.json`: proposed parameters (name Acoin, symbol ACOIN; supply is a proposal the owner can change).
 - `plan.mjs`: pure plan and checks, no network, no keys.
 - `deploy-devnet.mjs`: devnet only; creates the mint, mints the whole supply once, then removes the mint authority. Refuses any non-devnet RPC.
 - `verify-supply.mjs`: read-only check that a mint is fixed-supply.

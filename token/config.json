@@ -1,7 +1,7 @@
 {
-  "_note": "Placeholders and proposals. The owner decides every value before anything is minted anywhere. Name and symbol are NOT chosen yet and may collide with existing tokens: check before use.",
-  "name": "Agent Receipt Credit (placeholder)",
-  "symbol": "TBD",
+  "_note": "Placeholders and proposals. The owner decides every value before anything is minted anywhere. Name Acoin and symbol ACOIN were chosen by the owner (symbol is an assumption); check for collisions with existing tokens before any mainnet use.",
+  "name": "Acoin",
+  "symbol": "ACOIN",
   "decimals": 6,
   "totalSupplyWholeTokens": 100000000,
   "program": "spl-token (classic, no extensions)",

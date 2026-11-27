@@ -3,7 +3,7 @@
 Nothing here is automated, and these scripts refuse mainnet. The owner takes the decisions and the legal responsibility.
 
 1. Written legal advice for the exact distribution plan and wording (not only a verbal or chat opinion).
-2. Decide name, symbol, total supply; search for collisions.
+2. Confirm name (Acoin) and symbol (ACOIN), decide total supply; search for collisions with existing tokens.
 3. Decide how holders get tokens. If any sale or promise of value is involved, stop and get advice again.
 4. Use a hardware wallet or a fresh wallet funded by him. Keys never go to any agent or this repo.
 5. Rehearse the full flow on devnet first and run `verify-supply.mjs`.

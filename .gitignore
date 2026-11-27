@@ -2,3 +2,6 @@ data/
 node_modules/
 *.key
 .env
+e2e/node_modules/
+e2e/*.json.key
+e2e/.wallet*

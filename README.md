@@ -88,3 +88,7 @@ Zero capital. Free-tier hosting only. The project owner holds the accounts, wall
 curl -s "$B/v1/proof/rcpt_xxx?include=receipt" > proof.json && curl -s "$B/.well-known/receipt-key" > key.pem
 node verifier/verify.mjs --bundle proof.json --key key.pem
 ```
+
+
+## For agents
+Start at docs/13-agent-quickstart.md. Discovery: /llms.txt, /openapi.json, /.well-known/agent.json. MCP server in mcp/.

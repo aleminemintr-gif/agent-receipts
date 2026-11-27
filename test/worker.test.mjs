@@ -406,3 +406,17 @@ test('try: no key, signed receipt, limited checks, per-address cap', async () =>
   assert.equal((await post({ check: 'http_status', params: { url: 'https://site.test/' } })).status, 429);
   assert.equal((await post({ check: 'http_status', params: { url: 'https://site.test/' } }, '8.8.8.8')).status, 200);
 });
+
+test('discovery: openapi, llms.txt and agent card are served and consistent with the API', async () => {
+  const e = env();
+  const get = (p) => worker.fetch(new Request('https://ar.test' + p, { headers: { 'cf-connecting-ip': '3.3.3.3' } }), e);
+  const spec = await (await get('/openapi.json')).json();
+  assert.equal(spec.openapi, '3.1.0');
+  for (const p of ['/v1/try', '/v1/verify', '/v1/claim', '/v1/claim/challenge', '/v1/accounts', '/v1/watches']) assert.ok(spec.paths[p], p);
+  assert.equal(spec.servers[0].url, 'https://ar.test');
+  const txt = await (await get('/llms.txt')).text();
+  assert.match(txt, /x402/); assert.match(txt, /\/v1\/claim/); assert.match(txt, /public facts only/i);
+  const card = await (await get('/.well-known/agent.json')).json();
+  assert.equal(card.name, 'agent-receipts'); assert.ok(card.skills.length >= 3);
+  assert.ok(card.authentication.some((a) => a.type === 'x402'));
+});

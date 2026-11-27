@@ -1,4 +1,5 @@
 // Cloudflare Worker entry. Storage: D1. Secret: SIGNING_KEY_PKCS8_B64.
+import * as disc from './discovery.mjs';
 import { canonical, importPrivate, publicFromPrivate, publicPem, keyId, signReceipt, verifyReceipt, sha256 } from './receipt-web.mjs';
 import { runCheck, CHECKS, METHODS } from './checks.mjs';
 import * as x402 from './x402.mjs';
@@ -147,6 +148,9 @@ export default {
           payments: (() => { const c = x402.config(env); return c ? { protocol: 'x402 v2', network: c.network, asset: c.asset, pay_to: c.payTo, prices_usd: x402.PRICES_USD, note: 'Devnet unless network says mainnet. Pay with PAYMENT-SIGNATURE, no account needed.' } : { enabled: false }; })(),
           early_program: { limit: earlyLimit, points_each: EARLY_POINTS, taken: n, open: n < earlyLimit, note: 'Trial points are non-transferable credits bound to an agent key fingerprint (POST /v1/claim). Not a token. A key alone does not stop Sybil; limits only raise the cost.' } });
       }
+      if (req.method === 'GET' && url.pathname === '/openapi.json') return new Response(JSON.stringify(disc.openapi(url.origin), null, 1), { headers: { 'content-type': 'application/json', 'access-control-allow-origin': '*' } });
+      if (req.method === 'GET' && url.pathname === '/llms.txt') return new Response(disc.llmsTxt(url.origin), { headers: { 'content-type': 'text/plain; charset=utf-8', 'access-control-allow-origin': '*' } });
+      if (req.method === 'GET' && (url.pathname === '/.well-known/agent.json' || url.pathname === '/.well-known/agent-card.json')) return new Response(JSON.stringify(disc.agentCard(url.origin), null, 1), { headers: { 'content-type': 'application/json', 'access-control-allow-origin': '*' } });
       if (req.method === 'GET' && url.pathname === '/.well-known/receipt-key') {
         return new Response(await publicPem(k.publicKey), { headers: { 'content-type': 'application/x-pem-file' } });
       }

@@ -1,0 +1,2 @@
+{ "name": "x402-autopay-example", "private": true, "type": "module",
+  "dependencies": { "@solana/kit": "^8.6.0", "@x402/core": "^2.32.0", "@x402/fetch": "^2.32.0", "@x402/svm": "^2.32.0" } }

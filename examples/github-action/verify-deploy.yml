@@ -1,0 +1,22 @@
+# Copy to .github/workflows/verify-deploy.yml in your repo.
+# After your deploy step, ask an outside witness whether the public page really changed.
+name: verify-deploy
+on:
+  workflow_dispatch:
+  push: { branches: [main] }
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      # ... your deploy steps here ...
+      - uses: actions/checkout@v4   # needed so the action files can be read when the action lives in this same repo
+      - id: receipt
+        uses: ./action               # in another repo: uses: <owner>/agent-receipts/action@main (the repo must be readable by that workflow)
+        with:
+          url: https://example.com
+          contains: Example Domain
+          claim: "example.com is published"
+          # api-key: ${{ secrets.AGENT_RECEIPTS_KEY }}   # optional, for more than the 5-per-hour trial limit
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with: { name: receipt, path: receipt.json }

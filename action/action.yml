@@ -1,0 +1,24 @@
+name: Verify a public claim
+description: Check that a public URL is live (and optionally contains text) and get a signed receipt. Fails the job if the claim does not hold.
+inputs:
+  url: { description: 'Public URL to check', required: true }
+  contains: { description: 'Text the page must contain (optional)', required: false, default: '' }
+  claim: { description: 'What this deploy claims', required: false, default: 'deploy is live' }
+  api-url: { description: 'Service base URL', required: false, default: 'https://agent-receipts.amin-experiments.workers.dev' }
+  api-key: { description: 'API key (optional; without it the limited no-signup endpoint is used)', required: false, default: '' }
+outputs:
+  receipt_id: { description: 'Receipt id', value: '${{ steps.v.outputs.receipt_id }}' }
+  passed: { description: 'true or false', value: '${{ steps.v.outputs.passed }}' }
+runs:
+  using: composite
+  steps:
+    - id: v
+      shell: bash
+      env:
+        AR_URL: ${{ inputs.url }}
+        AR_CONTAINS: ${{ inputs.contains }}
+        AR_CLAIM: ${{ inputs.claim }}
+        AR_API_URL: ${{ inputs.api-url }}
+        AR_API_KEY: ${{ inputs.api-key }}
+        AR_OUT: receipt.json
+      run: node "${{ github.action_path }}/verify.mjs"

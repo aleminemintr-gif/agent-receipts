@@ -2,7 +2,7 @@
 
 An outside witness for AI agents. An agent says "I did it", this service checks the real world on its own, and returns a **signed receipt** anyone can verify offline.
 
-> Status: working prototype (v0.1). Zero dependencies, runs on Node 20+. Not yet deployed. No payments wired in.
+> Status: live prototype (v0.1) on Cloudflare Workers + D1 free tier: https://agent-receipts.amin-experiments.workers.dev . No payments wired in.
 
 ![dashboard](screenshots/dashboard.png)
 

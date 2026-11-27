@@ -69,6 +69,7 @@ First 10,000 accounts get 25 points once. A point buys one receipt after the fre
 - [06 Roadmap](docs/06-roadmap.md)
 - [07 Free-tier deployment](docs/07-deployment.md)
 - [08 Methodology and receipt fields](docs/08-methodology.md)
+- [09 x402 payments (Solana devnet)](docs/09-x402-devnet.md)
 - [ERRORS_AND_FIXES.md](ERRORS_AND_FIXES.md)
 
 ## Principles

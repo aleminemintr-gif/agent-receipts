@@ -17,3 +17,8 @@ CREATE INDEX IF NOT EXISTS watches_due ON watches(status, due_at);
 CREATE TABLE IF NOT EXISTS payments (
   tx TEXT PRIMARY KEY, payer TEXT, network TEXT, asset TEXT, amount TEXT, kind TEXT, account_id TEXT, at TEXT
 );
+CREATE TABLE IF NOT EXISTS leaves (seq INTEGER PRIMARY KEY, id TEXT NOT NULL, day TEXT NOT NULL);
+CREATE INDEX IF NOT EXISTS leaves_day ON leaves(day, seq);
+CREATE TABLE IF NOT EXISTS roots (
+  day TEXT PRIMARY KEY, statement TEXT NOT NULL, anchor_tx TEXT, anchor_cluster TEXT, anchor_at TEXT
+);

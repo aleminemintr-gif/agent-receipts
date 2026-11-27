@@ -47,3 +47,8 @@ export async function verifyReceipt(receipt, publicKey) {
     return { valid: false, reason: 'malformed: ' + e.message };
   }
 }
+
+// Signed statements (daily roots): same canonical JSON, same key as receipts.
+export async function signStatement({ privateKey }, obj) {
+  return { ...obj, sig: b64(await crypto.subtle.sign({ name: 'Ed25519' }, privateKey, enc.encode(canonical(obj)))) };
+}

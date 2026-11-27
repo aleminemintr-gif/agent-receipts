@@ -47,31 +47,43 @@ async function fetchFollow(urlStr, allowPrivate) {
       cur = new URL(res.headers.get('location'), cur).toString();
       continue;
     }
-    return { status: res.status, body: await readCapped(res), finalUrl: cur };
+    const hdr = {};
+    for (const h of ['content-type', 'content-length', 'etag', 'last-modified', 'cache-control', 'server']) if (res.headers.get(h)) hdr[h] = res.headers.get(h);
+    return { status: res.status, body: await readCapped(res), finalUrl: cur, headers: hdr, hops: i };
   }
   throw new Error('too many redirects');
 }
 const getPath = (obj, path) => path.split('.').reduce((o, k) => (o == null ? undefined : o[k]), obj);
 const text = (b) => new TextDecoder().decode(b);
+// Raw evidence block shared by every HTTP check: enough to reproduce and audit.
+const raw = (r) => ({ status: r.status, final_url: r.finalUrl, redirects: r.hops, headers: r.headers, body_bytes: r.body.length, body_excerpt: text(r.body.slice(0, 300)) });
+
+export const METHODS = {
+  http_status: { version: 1, summary: 'One GET from a Cloudflare Worker (public internet, no cookies). Redirects followed manually, max 4, each hop re-checked against the private-address guard. Passes when the final status equals expect_status (default 200).', reproduce: 'curl -sL -o /dev/null -w "%{http_code}" URL' },
+  http_contains: { version: 1, summary: 'Same GET. Body read up to 1,000,000 bytes, decoded as UTF-8. Passes when status < 400 and the body contains the exact, case-sensitive text. body_sha256 is over the decoded string.', reproduce: 'curl -sL URL | grep -F "TEXT"' },
+  json_field: { version: 1, summary: 'Same GET. Body parsed as JSON, value read by dot path (a.b.c), compared with equals by JSON equality. A missing path or invalid JSON fails.', reproduce: 'curl -sL URL | jq .a.b.c' },
+  content_hash: { version: 1, summary: 'Same GET. SHA-256 over the raw bytes (capped at 1,000,000). Passes when it equals the given sha256 and status < 400.', reproduce: 'curl -sL URL | sha256sum' },
+  dns_record: { version: 1, summary: 'DNS-over-HTTPS query to cloudflare-dns.com for name and type. Passes when any returned record contains the given string. Resolver caches can lag the authoritative server.', reproduce: 'dig +short TYPE NAME @1.1.1.1' },
+};
 
 export const CHECKS = {
   async http_status({ url, expect_status = 200 }, ap) {
     const r = await fetchFollow(url, ap);
-    return { passed: r.status === Number(expect_status), observed: { status: r.status, final_url: r.finalUrl } };
+    return { passed: r.status === Number(expect_status), observed: raw(r) };
   },
   async http_contains({ url, text: needle }, ap) {
     if (!needle) throw new Error('text required');
     const r = await fetchFollow(url, ap); const body = text(r.body);
-    return { passed: r.status < 400 && body.includes(needle), observed: { status: r.status, body_sha256: await sha256(body), found: body.includes(needle) } };
+    return { passed: r.status < 400 && body.includes(needle), observed: { ...raw(r), body_sha256: await sha256(body), found: body.includes(needle) } };
   },
   async json_field({ url, path, equals }, ap) {
     const r = await fetchFollow(url, ap); let value;
     try { value = getPath(JSON.parse(text(r.body)), path); } catch { value = undefined; }
-    return { passed: value !== undefined && JSON.stringify(value) === JSON.stringify(equals), observed: { status: r.status, value } };
+    return { passed: value !== undefined && JSON.stringify(value) === JSON.stringify(equals), observed: { ...raw(r), value } };
   },
   async content_hash({ url, sha256: want }, ap) {
     const r = await fetchFollow(url, ap); const got = await sha256(r.body);
-    return { passed: r.status < 400 && got === String(want).toLowerCase(), observed: { status: r.status, sha256: got } };
+    return { passed: r.status < 400 && got === String(want).toLowerCase(), observed: { ...raw(r), sha256: got } };
   },
   // DNS over HTTPS (Workers have no resolver API).
   async dns_record({ name, type = 'A', contains }) {
@@ -79,7 +91,7 @@ export const CHECKS = {
     const res = await fetch(`https://cloudflare-dns.com/dns-query?name=${encodeURIComponent(name)}&type=${type}`, { headers: { accept: 'application/dns-json' }, signal: AbortSignal.timeout(TIMEOUT_MS) });
     const j = await res.json();
     const records = (j.Answer || []).map((a) => String(a.data));
-    return { passed: records.some((r) => r.includes(contains)), observed: { records } };
+    return { passed: records.some((r) => r.includes(contains)), observed: { query: { name, type }, resolver: 'cloudflare-dns.com', records: records.sort() } };
   },
 };
 

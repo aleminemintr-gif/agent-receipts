@@ -42,6 +42,7 @@ export default {
     const earlyLimit = Number(env.EARLY_LIMIT || EARLY_LIMIT);
     try {
       if (req.method === 'OPTIONS') return new Response(null, { status: 204, headers: { 'access-control-allow-origin': '*', 'access-control-allow-headers': 'authorization,content-type' } });
+      if (req.method === 'GET' && env.ASSETS && (url.pathname === '/' || url.pathname === '/index.html')) return env.ASSETS.fetch(req);
       const k = await keys(env);
 
       if (req.method === 'GET' && url.pathname === '/v1/info') {
@@ -107,6 +108,7 @@ export default {
         const rows = (await env.DB.prepare('SELECT body FROM receipts ORDER BY seq DESC LIMIT 10').all()).results;
         return json({ receipts: rows.map((x) => JSON.parse(x.body)).map((r) => ({ id: r.id, check: r.check, claim: r.claim, passed: r.passed, at: r.at })) });
       }
+      if (req.method === 'GET' && env.ASSETS && !url.pathname.startsWith('/v1/')) return env.ASSETS.fetch(req);
       return json({ error: 'not found' }, 404);
     } catch (e) {
       return json({ error: String(e.message || e) }, 400);

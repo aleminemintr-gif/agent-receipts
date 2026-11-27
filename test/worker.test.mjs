@@ -11,6 +11,7 @@ function fakeD1() {
   const db = new DatabaseSync(':memory:');
   db.exec(fs.readFileSync(new URL('../worker/schema.sql', import.meta.url), 'utf8'));
   return {
+    _db: db,
     prepare(sql) {
       const st = db.prepare(sql);
       return {
@@ -33,10 +34,11 @@ const { privateKey, publicKey } = generateKeyPairSync('ed25519');
 const env = () => ({ DB: fakeD1(), SIGNING_KEY_PKCS8_B64: privateKey.export({ type: 'pkcs8', format: 'der' }).toString('base64') });
 const pem = publicKey.export({ type: 'spki', format: 'pem' });
 
+const runCron = async (e) => { let p; await worker.scheduled({}, e, { waitUntil: (x) => { p = x; } }); await p; };
 const realFetch = globalThis.fetch;
 test.before(() => {
   globalThis.fetch = async (u) => {
-    if (String(u) === 'https://site.test/') return new Response('hello deployed page', { status: 200 });
+    if (String(u) === 'https://site.test/') return new Response(globalThis.__page || 'hello deployed page', { status: 200, headers: { 'content-type': 'text/html', etag: 'abc' } });
     if (String(u) === 'https://site.test/missing') return new Response('no', { status: 404 });
     return new Response('x', { status: 500 });
   };
@@ -87,4 +89,65 @@ test('worker: early program limit and SSRF guard', async () => {
     const r = await call(e, '/v1/verify', { method: 'POST', key: a.body.api_key, body: { check: 'http_status', params: { url: u } } });
     assert.match(r.body.receipt.error, /not public/, u);
   }
+});
+
+test('receipt carries raw observation, method, timing and fingerprint', async () => {
+  const e = env();
+  const { body } = await call(e, '/v1/accounts', { method: 'POST', body: {} });
+  const r = (await call(e, '/v1/verify', { method: 'POST', key: body.api_key, body: { check: 'http_contains', params: { url: 'https://site.test/', text: 'deployed' } } })).body.receipt;
+  assert.equal(r.observed.headers.etag, 'abc');
+  assert.equal(r.observed.body_excerpt, 'hello deployed page');
+  assert.equal(r.observed.body_bytes, 19);
+  assert.equal(r.method.name, 'http_contains');
+  assert.match(r.method.reproduce, /curl/);
+  assert.equal(typeof r.duration_ms, 'number');
+  assert.equal(r.fingerprint.length, 64);
+  const m = await call(e, '/v1/methodology');
+  assert.ok(m.body.methods.dns_record);
+});
+
+test('watch: baseline now, recheck after N minutes, drift detected', async () => {
+  const e = env();
+  globalThis.__page = 'version one';
+  const { body } = await call(e, '/v1/accounts', { method: 'POST', body: {} });
+  const key = body.api_key;
+  const bad = await call(e, '/v1/watches', { method: 'POST', key, body: { check: 'http_contains', params: { url: 'https://site.test/', text: 'version' }, recheck_after_minutes: 1 } });
+  assert.equal(bad.status, 400);
+  const w = await call(e, '/v1/watches', { method: 'POST', key, body: { check: 'http_contains', claim: 'page says version', params: { url: 'https://site.test/', text: 'version' }, recheck_after_minutes: 30 } });
+  assert.equal(w.status, 201);
+  assert.equal(w.body.baseline.watch_role, 'baseline');
+  const id = w.body.watch;
+  // Costs two receipts up front.
+  assert.equal((await call(e, '/v1/me', { key })).body.free_left_today, 3);
+  // Not due yet: cron does nothing.
+  await runCron(e);
+  assert.equal((await call(e, '/v1/watches/' + id, { key })).body.status, 'pending');
+  // Time passes and the page changes (still contains the text, so pass/fail alone would miss it).
+  e.DB._db.exec("UPDATE watches SET due_at='2000-01-01T00:00:00.000Z'");
+  globalThis.__page = 'version two';
+  await runCron(e);
+  const done = (await call(e, '/v1/watches/' + id, { key })).body;
+  assert.equal(done.status, 'done');
+  assert.equal(done.drift, true);
+  assert.equal(done.recheck_receipt.passed, true);
+  assert.equal(done.recheck_receipt.baseline, w.body.baseline.id);
+  assert.equal(verifyNode(done.recheck_receipt, pem).valid, true);
+  // Unchanged page: no drift.
+  const w2 = await call(e, '/v1/watches', { method: 'POST', key, body: { check: 'http_status', params: { url: 'https://site.test/' }, recheck_after_minutes: 5 } });
+  e.DB._db.exec("UPDATE watches SET due_at='2000-01-01T00:00:00.000Z' WHERE status='pending'");
+  await runCron(e);
+  assert.equal((await call(e, '/v1/watches/' + w2.body.watch, { key })).body.drift, false);
+  // Another account cannot read it.
+  const other = await call(e, '/v1/accounts', { method: 'POST', body: {} });
+  assert.equal((await call(e, '/v1/watches/' + id, { key: other.body.api_key })).status, 404);
+  delete globalThis.__page;
+});
+
+test('watch: needs two receipts, refunds the first if the second is missing', async () => {
+  const e = env();
+  const { body } = await call(e, '/v1/accounts', { method: 'POST', body: {} });
+  e.DB._db.exec("UPDATE accounts SET points=0, used_today=4, day='" + new Date().toISOString().slice(0, 10) + "'");
+  const r = await call(e, '/v1/watches', { method: 'POST', key: body.api_key, body: { check: 'http_status', params: { url: 'https://site.test/' }, recheck_after_minutes: 5 } });
+  assert.equal(r.status, 402);
+  assert.equal((await call(e, '/v1/me', { key: body.api_key })).body.free_left_today, 1);
 });

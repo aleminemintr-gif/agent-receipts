@@ -21,3 +21,6 @@ A running log of what broke while building this and how it was fixed.
 
 ## 15. Token work scope reversed twice
 Cause: the instruction changed from "cancel coin work" to "build devnet-only utility token tech". Fix: acted only on the later one after checking the owner's own message; the earlier sandbox code was never pushed. Scope kept: devnet only, no mainnet script, no sale, no liquidity, no price claims.
+
+## 16. x402 settle failed: recipient token account missing
+Symptom: 402 with invalid_exact_svm_recipient_ata_missing. Cause: the receiving address never held devnet USDC, so it had no associated token account. Fix: created the account (anyone can, payer funds rent), retried, settled. Lesson: create the recipient token account before going live on any network.

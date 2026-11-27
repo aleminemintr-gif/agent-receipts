@@ -390,3 +390,19 @@ test('limits: points are capped per key per day and credit receipts per address 
   assert.equal(last.status, 402); // 20 points allowed today, the 21st is refused
   assert.equal((await call(e, '/v1/me', { key: a.body.api_key })).body.points, 80); // refused one was refunded
 });
+
+test('try: no key, signed receipt, limited checks, per-address cap', async () => {
+  const e = env();
+  const post = (b, ip = '7.7.7.7') => worker.fetch(new Request('https://ar.test/v1/try', { method: 'POST', body: JSON.stringify(b), headers: { 'cf-connecting-ip': ip } }), e);
+  const ok = await post({ check: 'http_contains', claim: 'page says hello', params: { url: 'https://site.test/', text: 'hello' } });
+  assert.equal(ok.status, 200);
+  const j = await ok.json();
+  assert.equal(j.receipt.passed, true);
+  assert.equal(j.receipt.paid_with, 'free-try');
+  assert.ok(j.receipt.sig);
+  assert.equal((await post({ check: 'dns_record', params: {} })).status, 400);
+  for (let i = 0; i < 3; i++) await post({ check: 'http_status', params: { url: 'https://site.test/' } });
+  await post({ check: 'http_status', params: { url: 'https://site.test/' } });
+  assert.equal((await post({ check: 'http_status', params: { url: 'https://site.test/' } })).status, 429);
+  assert.equal((await post({ check: 'http_status', params: { url: 'https://site.test/' } }, '8.8.8.8')).status, 200);
+});

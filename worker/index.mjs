@@ -18,6 +18,8 @@ async function keys(env) {
   return keyCache;
 }
 
+const TRY_CHECKS = ['http_status', 'http_contains', 'json_field'];
+const TRY_PER_IP_HOUR = 5, TRY_GLOBAL_HOUR = 200;
 async function limited(env, ip, bucket, max, windowMs) {
   const k = bucket + ':' + ip, now = Date.now();
   await env.DB.prepare('DELETE FROM hits WHERE ts < ?').bind(now - 3600_000).run();
@@ -170,6 +172,15 @@ export default {
         if (!a) return json({ error: 'invalid api key' }, 401);
         const idn = await env.DB.prepare('SELECT fp FROM identities WHERE account_id = ?').bind(a.id).first();
         return json({ ...view(a), identity: idn ? idn.fp : null });
+      }
+      // No-signup trial: signed receipt, no key. Limited checks, per-address and global hourly caps (free-tier protection).
+      if (req.method === 'POST' && url.pathname === '/v1/try') {
+        if (await limited(env, ip, 'try', TRY_PER_IP_HOUR, 3600_000)) return json({ error: `try-it limit reached (${TRY_PER_IP_HOUR} per hour per address). Create a free account (POST /v1/accounts) for more.` }, 429);
+        if (await limited(env, 'all', 'try', Number(env.TRY_GLOBAL_HOUR || TRY_GLOBAL_HOUR), 3600_000)) return json({ error: 'try-it is busy, please retry later or create a free account' }, 429);
+        const body = await req.json().catch(() => null);
+        if (!body || !TRY_CHECKS.includes(body.check)) return json({ error: 'try supports these checks only', available: TRY_CHECKS }, 400);
+        const receipt = await runAndSign(env, k, 'try', { check: body.check, params: body.params, claim: body.claim, paid_with: 'free-try' }, allowPrivate);
+        return json({ receipt, verify_url: `/v1/receipts/${receipt.id}`, note: 'Trial receipt. For your own agent use an API key or x402: see /v1/info.' });
       }
       if (req.method === 'POST' && url.pathname === '/v1/verify') {
         const a = await accountFor(env, req);

@@ -2,6 +2,7 @@
 import { canonical, importPrivate, publicFromPrivate, publicPem, keyId, signReceipt, verifyReceipt, sha256 } from './receipt-web.mjs';
 import { runCheck, CHECKS, METHODS } from './checks.mjs';
 import * as x402 from './x402.mjs';
+import * as tlog from './log.mjs';
 
 const EARLY_LIMIT = 10_000, EARLY_POINTS = 25, FREE_PER_DAY = 5;
 const today = () => new Date().toISOString().slice(0, 10);
@@ -113,7 +114,7 @@ const withSettle = (resp, h) => { if (h) resp.headers.set('PAYMENT-RESPONSE', h)
 
 export default {
   async scheduled(event, env, ctx) {
-    ctx.waitUntil(processDueWatches(env));
+    ctx.waitUntil((async () => { await processDueWatches(env); await tlog.closeDays(env, await keys(env)); })());
   },
   async fetch(req, env) {
     const url = new URL(req.url);
@@ -161,6 +162,27 @@ export default {
         return withSettle(json({ receipt, verify_url: `/v1/receipts/${receipt.id}` }), pay.settleHeader);
       }
       let m;
+      if (req.method === 'GET' && url.pathname === '/v1/log') return json(await tlog.logPage(env, Number(url.searchParams.get('after') || 0), Number(url.searchParams.get('limit') || 100)));
+      if (req.method === 'GET' && url.pathname === '/v1/roots') {
+        const rows = (await env.DB.prepare('SELECT day FROM roots ORDER BY day DESC LIMIT 60').all()).results;
+        return json({ key_id: await keyId(k.publicKey), roots: await Promise.all(rows.map((r) => tlog.getRoot(env, r.day))) });
+      }
+      if (req.method === 'GET' && (m = url.pathname.match(/^\/v1\/roots\/(\d{4}-\d{2}-\d{2})$/))) {
+        const r = await tlog.getRoot(env, m[1]);
+        return r ? json(r) : json({ error: 'no sealed root for that day' }, 404);
+      }
+      if (req.method === 'POST' && (m = url.pathname.match(/^\/v1\/roots\/(\d{4}-\d{2}-\d{2})\/anchor$/))) {
+        const b = await req.json().catch(() => ({}));
+        if (await limited(env, ip, 'anchor', 10, 60_000)) return json({ error: 'rate limit' }, 429);
+        const r = await tlog.recordAnchor(env, m[1], b.signature);
+        return json(r, r.status);
+      }
+      if (req.method === 'GET' && (m = url.pathname.match(/^\/v1\/proof\/(rcpt_[a-f0-9]+)$/))) {
+        const r = await tlog.proofFor(env, m[1]);
+        if (r.status !== 200) return json({ error: r.error }, r.status);
+        const b = { ...r.bundle }; if (url.searchParams.get('include') !== 'receipt') delete b.receipt;
+        return json(b);
+      }
       if (req.method === 'GET' && url.pathname === '/v1/methodology') return json({ methods: METHODS, note: 'Receipt fields: observed = raw evidence, fingerprint = sha256 of observed (no timestamps), at = UTC time of the check, duration_ms, method = the method entry used.' });
       if (req.method === 'POST' && url.pathname === '/v1/watches') {
         const a = await accountFor(env, req);

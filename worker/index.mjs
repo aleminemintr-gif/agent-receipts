@@ -270,8 +270,9 @@ const handler = {
         return json(await verifyReceipt(body.receipt || {}, k.publicKey));
       }
       if (req.method === 'GET' && url.pathname === '/v1/recent') {
-        const rows = (await env.DB.prepare('SELECT body FROM receipts ORDER BY seq DESC LIMIT 10').all()).results;
-        return json({ receipts: rows.map((x) => JSON.parse(x.body)).map((r) => ({ id: r.id, check: r.check, claim: r.claim, passed: r.passed, at: r.at })) });
+        const rows = (await env.DB.prepare('SELECT body FROM receipts ORDER BY seq DESC LIMIT 60').all()).results;
+        // Internal dogfood traffic never appears in the public table: tagged claims, and everything before PUBLIC_TABLE_FROM (all earlier traffic was our own testing).
+        return json({ receipts: rows.map((x) => JSON.parse(x.body)).filter((r) => !String(r.claim || '').startsWith('[internal') && (!env.PUBLIC_TABLE_FROM || r.at >= env.PUBLIC_TABLE_FROM)).slice(0, 10).map((r) => ({ id: r.id, check: r.check, claim: r.claim, passed: r.passed, at: r.at })) });
       }
       if (req.method === 'GET' && env.ASSETS && !url.pathname.startsWith('/v1/')) return env.ASSETS.fetch(req);
       return json({ error: 'not found' }, 404);

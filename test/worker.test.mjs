@@ -450,3 +450,19 @@ test('402 carries the bazaar discovery declaration in header and body', async ()
   const w = await raw(e, '/v1/watches', { body: { check: 'http_status', params: { url: 'https://site.test/' }, recheck_after_minutes: 5 } });
   assert.equal(JSON.parse(Buffer.from(w.headers.get('payment-required'), 'base64').toString()).extensions.bazaar.info.input.body.recheck_after_minutes, 60);
 });
+
+test('recent: internal dogfood receipts are excluded from the public table', async () => {
+  const e = env();
+  const { body } = await call(e, '/v1/accounts', { method: 'POST', body: {} });
+  const v = (claim) => call(e, '/v1/verify', { method: 'POST', key: body.api_key, body: { check: 'http_status', claim, params: { url: 'https://site.test/' } } });
+  await v('[internal-dogfood] hidden'); await v('visible claim');
+  const claims = (await call(e, '/v1/recent')).body.receipts.map((r) => r.claim);
+  assert.ok(claims.includes('visible claim')); assert.ok(!claims.some((c) => c.startsWith('[internal')));
+});
+
+test('recent: receipts before PUBLIC_TABLE_FROM are hidden from the public table', async () => {
+  const e = { ...env(), PUBLIC_TABLE_FROM: '2999-01-01T00:00:00.000Z' };
+  const { body } = await call(e, '/v1/accounts', { method: 'POST', body: {} });
+  await call(e, '/v1/verify', { method: 'POST', key: body.api_key, body: { check: 'http_status', claim: 'old test', params: { url: 'https://site.test/' } } });
+  assert.equal((await call(e, '/v1/recent')).body.receipts.length, 0);
+});

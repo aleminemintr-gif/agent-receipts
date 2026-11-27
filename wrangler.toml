@@ -15,6 +15,7 @@ database_id = "c15ed64c-9958-4baa-aec2-a0a4bb52cc92"
 crons = ["*/5 * * * *"]
 
 [vars]
+PUBLIC_TABLE_FROM = "2026-11-27T23:00:00.000Z"
 PAY_TO = "ARcYk3J3iBnJZMduVevMS7jsYh7puQtXH9WN8FtAjAbJ"
 X402_NETWORK = "solana:EtWTRABZaYq6iMfeYKouRu166VU2xqa1"
 X402_ASSET = "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU"

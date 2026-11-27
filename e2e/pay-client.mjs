@@ -9,6 +9,6 @@ const signer = await createKeyPairSignerFromBytes(Uint8Array.from(JSON.parse(fs.
 const client = new x402Client().register('solana:*', new ExactSvmScheme(signer));
 const pay = wrapFetchWithPayment(fetch, client);
 const res = await pay(base + '/v1/verify', { method: 'POST', headers: { 'content-type': 'application/json' },
-  body: JSON.stringify({ check: 'http_contains', claim: 'example.com is published', params: { url: 'https://example.com/', text: 'Example Domain' } }) });
+  body: JSON.stringify({ check: 'http_contains', claim: process.env.CLAIM || 'example.com is published', params: { url: 'https://example.com/', text: 'Example Domain' } }) });
 console.log(res.status, res.headers.get('payment-response') ? 'settled' : 'no settlement header');
 console.log(JSON.stringify(await res.json(), null, 2));

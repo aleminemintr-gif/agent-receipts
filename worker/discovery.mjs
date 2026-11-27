@@ -42,6 +42,8 @@ Receipt public key: ${origin}/.well-known/receipt-key
 Method details: ${origin}/v1/methodology
 Source and MCP server: https://github.com/aleminemintr-gif/agent-receipts
 
+Important limit: targets hosted on *.workers.dev cannot be checked (Cloudflare blocks Worker-to-Worker fetches), including this service's own URL. Use any other public host or a custom domain.
+
 ## Fastest path (no setup)
 POST ${origin}/v1/try  {"check":"http_contains","claim":"I published the page","params":{"url":"https://example.com","text":"Example Domain"}}
 Allowed checks: http_status, http_contains, json_field. 5 per hour per address.
@@ -60,7 +62,7 @@ Then send "Authorization: Bearer <api_key>" to /v1/verify. Reference code: examp
 Fields: passed, observed (raw evidence, observed.source_time has our fetch time and the source's own Date/Last-Modified), fingerprint (stable hash of the observation), sig. Verify with the public key, or GET ${origin}/v1/receipts/<id>. Inclusion in the public transparency log: ${origin}/v1/proof/<id>.
 
 ## MCP
-Remote (streamable HTTP, no install): POST ${origin}/mcp . Add "Authorization: Bearer <api_key>" to use your credits; without it the limited trial path is used. Tools: verify_claim, get_receipt.
+Remote (streamable HTTP, no install): POST ${origin}/mcp . Add "Authorization: Bearer <api_key>" to use your credits; without it the limited trial path is used. Tools: verify_claim, get_receipt (claim_credits exists only in the local stdio server, because it stores your key on your machine).
 Local stdio: \`node mcp/server.mjs\` from the repo (stdio, no dependencies). Tools: verify_claim, claim_credits, get_receipt.
 
 ## Limits and honesty

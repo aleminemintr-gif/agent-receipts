@@ -1,0 +1,107 @@
+{
+ "at": "2026-11-27T22:56:14.836Z",
+ "receipts": [
+  "rcpt_7f05ca814415cb016c642791",
+  "rcpt_c8c9a8b343903677c6646d5e",
+  "rcpt_69ec6b87acdb46dbb7c1638b"
+ ],
+ "log": [
+  {
+   "who": "A",
+   "step": "read llms.txt",
+   "ok": true,
+   "detail": "3235 chars"
+  },
+  {
+   "who": "A",
+   "step": "POST /v1/try",
+   "ok": true,
+   "detail": "HTTP 200"
+  },
+  {
+   "who": "A",
+   "step": "receipt has documented fields (passed, observed, fingerprint, sig)",
+   "ok": true,
+   "detail": "v,account,check,params,claim,passed,observed,error,at,duration_ms,method,fingerprint,paid_with,prev,kid,id,sig"
+  },
+  {
+   "who": "A",
+   "step": "receipt has observed.source_time",
+   "ok": true,
+   "detail": ""
+  },
+  {
+   "who": "B",
+   "step": "every openapi path answers (not 404/405)",
+   "ok": true,
+   "detail": ""
+  },
+  {
+   "who": "B",
+   "step": "mcp initialize",
+   "ok": true,
+   "detail": "{\"name\":\"agent-receipts\",\"version\":\"0.1.0\"}"
+  },
+  {
+   "who": "B",
+   "step": "mcp tools/list",
+   "ok": true,
+   "detail": "verify_claim,get_receipt"
+  },
+  {
+   "who": "B",
+   "step": "mcp verify_claim",
+   "ok": true,
+   "detail": "receipt: rcpt_c8c9a8b343903677c6646d5e"
+  },
+  {
+   "who": "B",
+   "step": "mcp initialize with newer protocolVersion",
+   "ok": true,
+   "detail": "server answered protocolVersion 2025-03-26"
+  },
+  {
+   "who": "C",
+   "step": "agent card has remote mcp url and x402 auth",
+   "ok": true,
+   "detail": "{\"transport\":\"streamable-http\",\"url\":\"https://agent-receipts.amin-experiments.workers.dev/mcp\"}"
+  },
+  {
+   "who": "C",
+   "step": "challenge has fields named in llms.txt (challenge_id, nonce, sign, pow_bits)",
+   "ok": true,
+   "detail": "challenge_id,nonce,pow_bits,expires_in_seconds,sign,pow"
+  },
+  {
+   "who": "C",
+   "step": "claim with the documented algorithm",
+   "ok": true,
+   "detail": "HTTP 201, pow 625ms, "
+  },
+  {
+   "who": "C",
+   "step": "verify with claimed key (json_field on /v1/info)",
+   "ok": false,
+   "detail": "cannot check: target is a Cloudflare Worker on workers.dev, which Cloudflare blocks from other Workers (error 1042). Use a custom domain or another host."
+  },
+  {
+   "who": "verify",
+   "step": "GET /v1/receipts/rcpt_7f05ca814415cb016c642791",
+   "ok": true,
+   "detail": "signature_valid=true"
+  },
+  {
+   "who": "verify",
+   "step": "GET /v1/receipts/rcpt_c8c9a8b343903677c6646d5e",
+   "ok": true,
+   "detail": "signature_valid=true"
+  },
+  {
+   "who": "verify",
+   "step": "GET /v1/receipts/rcpt_69ec6b87acdb46dbb7c1638b",
+   "ok": true,
+   "detail": "signature_valid=true"
+  }
+ ],
+ "key_pem_len": 113
+}

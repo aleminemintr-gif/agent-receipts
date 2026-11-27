@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import { DatabaseSync } from 'node:sqlite';
-import { generateKeyPairSync } from 'node:crypto';
+import { generateKeyPairSync, createHash, sign as edSign } from 'node:crypto';
 import worker from '../worker/index.mjs';
 import * as tlog from '../worker/log.mjs';
 import { importPrivate, publicFromPrivate } from '../worker/receipt-web.mjs';
@@ -34,8 +34,20 @@ function fakeD1() {
 }
 
 const { privateKey, publicKey } = generateKeyPairSync('ed25519');
-const env = () => ({ DB: fakeD1(), SIGNING_KEY_PKCS8_B64: privateKey.export({ type: 'pkcs8', format: 'der' }).toString('base64') });
+const env = () => ({ CLAIM_BITS: '8', DB: fakeD1(), SIGNING_KEY_PKCS8_B64: privateKey.export({ type: 'pkcs8', format: 'der' }).toString('base64') });
 const pem = publicKey.export({ type: 'spki', format: 'pem' });
+
+// Agent side of the claim: sign the nonce, solve the proof of work.
+async function claimIdentity(e, { key, ip = '9.9.9.9', kp = generateKeyPairSync('ed25519'), mutate } = {}) {
+  const ch = (await call(e, '/v1/claim/challenge')).body;
+  const pub = kp.publicKey.export({ format: 'der', type: 'spki' }).subarray(-32).toString('base64');
+  let n = 0; const bits = (h) => { let c = 0; for (const x of h) { const v = parseInt(x, 16); if (v === 0) { c += 4; continue; } c += Math.clz32(v) - 28; break; } return c; };
+  while (bits(createHash('sha256').update(`${ch.nonce}:${pub}:${n}`).digest('hex')) < ch.pow_bits) n++;
+  const signature = edSign(null, Buffer.from(ch.sign), kp.privateKey).toString('base64');
+  let body = { challenge_id: ch.challenge_id, public_key: pub, signature, pow: String(n) };
+  if (mutate) body = mutate(body);
+  return worker.fetch(new Request('https://ar.test/v1/claim', { method: 'POST', body: JSON.stringify(body), headers: { ...(key ? { authorization: 'Bearer ' + key } : {}), 'cf-connecting-ip': ip } }), e).then(async (r) => ({ status: r.status, body: await r.json() }));
+}
 
 const runCron = async (e) => { let p; await worker.scheduled({}, e, { waitUntil: (x) => { p = x; } }); await p; };
 const realFetch = globalThis.fetch;
@@ -63,9 +75,9 @@ const call = (e, path, { method = 'GET', body, key } = {}) =>
 
 test('worker: account, pass, fail, chain, and Node verifies the Worker signature', async () => {
   const e = env();
-  const a = await call(e, '/v1/accounts', { method: 'POST', body: { label: 'bot' } });
+  const a = await claimIdentity(e);
   assert.equal(a.status, 201);
-  assert.equal(a.body.account.points, 25);
+  assert.equal(a.body.points_granted, 25);
   const key = a.body.api_key;
   const ok = await call(e, '/v1/verify', { method: 'POST', key, body: { check: 'http_contains', claim: 'live', params: { url: 'https://site.test/', text: 'deployed' } } });
   assert.equal(ok.body.receipt.passed, true);
@@ -93,10 +105,10 @@ test('worker: quota, points, 402, no transfer route', async () => {
 
 test('worker: early program limit and SSRF guard', async () => {
   const e = { ...env(), EARLY_LIMIT: '1' };
-  const a = await call(e, '/v1/accounts', { method: 'POST', body: {} });
-  const b = await call(e, '/v1/accounts', { method: 'POST', body: {} });
-  assert.equal(a.body.account.points, 25);
-  assert.equal(b.body.account.points, 0);
+  const a = await claimIdentity(e);
+  const b = await claimIdentity(e, { ip: '8.8.4.4' });
+  assert.equal(a.body.points_granted, 25);
+  assert.equal(b.body.points_granted, 0);
   for (const u of ['http://127.0.0.1/', 'http://localhost/', 'http://169.254.169.254/', 'http://2130706433/']) {
     const r = await call(e, '/v1/verify', { method: 'POST', key: a.body.api_key, body: { check: 'http_status', params: { url: u } } });
     assert.match(r.body.receipt.error, /not public/, u);
@@ -316,4 +328,53 @@ test('anchor: accepted only when the chain shows the exact memo; first anchor is
   assert.equal(ok.status, 200);
   assert.equal((await call(e, `/v1/roots/${root.day}`)).body.anchor.tx, sig);
   assert.equal((await call(e, `/v1/roots/${root.day}/anchor`, { method: 'POST', body: { signature: '4'.repeat(88) } })).body.note.includes('first anchor'), true);
+});
+
+test('identity: claim binds credits to a key fingerprint; replay, reuse, weak PoW, bad signature all fail', async () => {
+  const e = env();
+  const kp = generateKeyPairSync('ed25519');
+  const ok = await claimIdentity(e, { kp });
+  assert.equal(ok.status, 201);
+  assert.match(ok.body.fingerprint, /^agent_[a-f0-9]{16}$/);
+  assert.equal((await call(e, '/v1/me', { key: ok.body.api_key })).body.identity, ok.body.fingerprint);
+  // Same key again: no second grant, even from another address.
+  assert.equal((await claimIdentity(e, { kp, ip: '7.7.7.7' })).status, 409);
+  // Bad signature (signed by a different key).
+  const other = generateKeyPairSync('ed25519');
+  const forged = await claimIdentity(e, { mutate: (b) => ({ ...b, signature: edSign(null, Buffer.from('x'), other.privateKey).toString('base64') }), ip: '6.6.6.6' });
+  assert.equal(forged.status, 400);
+  // Weak proof of work.
+  const weak = await claimIdentity(e, { mutate: (b) => ({ ...b, pow: 'nope' }), ip: '5.5.5.5' });
+  assert.equal(weak.status, 400);
+  assert.match(weak.body.error, /work/);
+  // Challenge replay.
+  const ch = (await call(e, '/v1/claim/challenge')).body;
+  const used = e.DB._db.prepare('UPDATE challenges SET used = 1 WHERE id = ?').run(ch.challenge_id);
+  assert.equal(Number(used.changes), 1);
+  const replay = await worker.fetch(new Request('https://ar.test/v1/claim', { method: 'POST', body: JSON.stringify({ challenge_id: ch.challenge_id, public_key: 'x', signature: 'x', pow: '0' }), headers: { 'cf-connecting-ip': '4.4.4.4' } }), e);
+  assert.equal(replay.status, 400);
+});
+
+test('identity: per-IP claim cap, link to an existing account, bare accounts get no points', async () => {
+  const e = env();
+  const bare = (await call(e, '/v1/accounts', { method: 'POST', body: {} })).body;
+  assert.equal(bare.account.points, 0);
+  const linked = await claimIdentity(e, { key: bare.api_key, ip: '3.3.3.3' });
+  assert.equal(linked.status, 201);
+  assert.equal(linked.body.account_id, bare.account.id);
+  assert.equal((await call(e, '/v1/me', { key: bare.api_key })).body.points, 25);
+  assert.equal((await claimIdentity(e, { key: bare.api_key, ip: '3.3.3.4' })).status, 409); // account already bound
+  assert.equal((await claimIdentity(e, { ip: '3.3.3.3' })).status, 201);
+  assert.equal((await claimIdentity(e, { ip: '3.3.3.3' })).status, 201);
+  assert.equal((await claimIdentity(e, { ip: '3.3.3.3' })).status, 429); // 4th from one address today
+});
+
+test('limits: points are capped per key per day and credit receipts per address per day', async () => {
+  const e = env();
+  const a = await claimIdentity(e, { ip: '2.2.2.2' });
+  e.DB._db.exec("UPDATE accounts SET points = 100, used_today = 5, day='" + new Date().toISOString().slice(0, 10) + "'");
+  let last;
+  for (let i = 0; i < 21; i++) last = await call(e, '/v1/verify', { method: 'POST', key: a.body.api_key, body: { check: 'http_status', params: { url: 'https://site.test/' } } });
+  assert.equal(last.status, 402); // 20 points allowed today, the 21st is refused
+  assert.equal((await call(e, '/v1/me', { key: a.body.api_key })).body.points, 80); // refused one was refunded
 });

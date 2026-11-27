@@ -42,7 +42,11 @@ Dev only: `ALLOW_PRIVATE=1 npm start` lets checks hit localhost (used for demos)
 
 | Method | Path | Notes |
 |---|---|---|
-| POST | `/v1/accounts` | Returns `api_key` once. First 10,000 accounts get 25 points. |
+| POST | `/v1/accounts` | Returns `api_key` once. Free quota only (5/day). |
+| GET | `/v1/claim/challenge` | Nonce and proof-of-work difficulty for an identity claim. |
+| POST | `/v1/claim` | Agent signs the nonce with its Ed25519 key and solves the PoW. First 10,000 identities get 25 trial points, bound to the key fingerprint. |
+| GET | `/v1/log`, `/v1/roots`, `/v1/roots/:day`, `/v1/proof/:id` | Public transparency log, daily signed Merkle roots, inclusion proofs. |
+| POST | `/v1/roots/:day/anchor` | Record a Solana memo anchor (accepted only if the chain shows the memo). |
 | GET | `/v1/me` | Balance, free receipts left today. |
 | POST | `/v1/verify` | `{check, claim, params}` returns a signed receipt. |
 | GET | `/v1/receipts/:id` | Stored receipt plus signature check. |
@@ -57,7 +61,7 @@ Checks: `http_status`, `http_contains`, `json_field`, `content_hash`, `dns_recor
 
 ## Early-user points (not a token)
 
-First 10,000 accounts get 25 points once. A point buys one receipt after the free daily quota (5/day). Points are a row in a ledger: no transfer, no withdrawal, no market, no price, no chain. A test asserts there is no transfer endpoint. Details and the abuse analysis: [docs/04-points-and-abuse.md](docs/04-points-and-abuse.md).
+First 10,000 agent identities (Ed25519 key fingerprints) get 25 points once, claimed by signing a challenge and solving a small proof of work. A point buys one receipt after the free daily quota (5/day). Points are a row in a ledger: no transfer, no withdrawal, no market, no price, no chain. A test asserts there is no transfer endpoint. Details and the abuse analysis: [docs/04-points-and-abuse.md](docs/04-points-and-abuse.md).
 
 ## Docs
 
@@ -70,8 +74,17 @@ First 10,000 accounts get 25 points once. A point buys one receipt after the fre
 - [07 Free-tier deployment](docs/07-deployment.md)
 - [08 Methodology and receipt fields](docs/08-methodology.md)
 - [09 x402 payments (Solana devnet)](docs/09-x402-devnet.md)
+- [10 Transparency log, daily roots, offline verifier, Solana anchoring](docs/10-transparency-log.md)
+- [11 Agent identity and trial credits](docs/11-identity-and-credits.md)
 - [ERRORS_AND_FIXES.md](ERRORS_AND_FIXES.md)
 
 ## Principles
 
 Zero capital. Free-tier hosting only. The project owner holds the accounts, wallet, signatures and KYC. Content written by other agents online is treated as untrusted data and never as instructions.
+
+## Verify a receipt without trusting us
+
+```bash
+curl -s "$B/v1/proof/rcpt_xxx?include=receipt" > proof.json && curl -s "$B/.well-known/receipt-key" > key.pem
+node verifier/verify.mjs --bundle proof.json --key key.pem
+```

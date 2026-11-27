@@ -3,6 +3,7 @@ import { canonical, importPrivate, publicFromPrivate, publicPem, keyId, signRece
 import { runCheck, CHECKS, METHODS } from './checks.mjs';
 import * as x402 from './x402.mjs';
 import * as tlog from './log.mjs';
+import * as ident from './identity.mjs';
 
 const EARLY_LIMIT = 10_000, EARLY_POINTS = 25, FREE_PER_DAY = 5;
 const today = () => new Date().toISOString().slice(0, 10);
@@ -37,13 +38,24 @@ async function accountFor(env, req) {
 }
 
 
+async function createAccount(env, label, points = 0, rank = null) {
+  const raw = 'ar_' + btoa(String.fromCharCode(...crypto.getRandomValues(new Uint8Array(24)))).replace(/\+/g, '-').replace(/\//g, '_').replace(/=/g, '');
+  const a = { id: 'acct_' + [...crypto.getRandomValues(new Uint8Array(6))].map((b) => b.toString(16).padStart(2, '0')).join(''), label: String(label || '').slice(0, 60),
+    created: new Date().toISOString(), early_rank: rank, points, day: today(), used_today: 0, total_receipts: 0 };
+  await env.DB.prepare('INSERT INTO accounts (key_hash,id,label,created,early_rank,points,day,used_today,total_receipts) VALUES (?,?,?,?,?,?,?,?,?)')
+    .bind(await sha256(raw), a.id, a.label, a.created, a.early_rank, a.points, a.day, 0, 0).run();
+  return { api_key: raw, account: view(a) };
+}
+
 async function charge(env, a) {
   const day = today();
   const free = await env.DB.prepare('UPDATE accounts SET day=?, used_today = CASE WHEN day=? THEN used_today+1 ELSE 1 END, total_receipts=total_receipts+1 WHERE key_hash=? AND ((day=? AND used_today<?) OR day<>?)')
     .bind(day, day, a.key_hash, day, FREE_PER_DAY, day).run();
   if (free.meta.changes) return 'free';
   const pt = await env.DB.prepare('UPDATE accounts SET points=points-1, total_receipts=total_receipts+1 WHERE key_hash=? AND points>0').bind(a.key_hash).run();
-  return pt.meta.changes ? 'point' : null;
+  if (!pt.meta.changes) return null;
+  if (!(await ident.takePointAllowance(env, a.id))) { await refund(env, a.key_hash, 'point'); return null; } // per-key daily cap on spending points
+  return 'point';
 }
 async function refund(env, keyHash, paidWith) {
   if (paidWith === 'free') await env.DB.prepare('UPDATE accounts SET used_today=MAX(0,used_today-1), total_receipts=total_receipts-1 WHERE key_hash=?').bind(keyHash).run();
@@ -99,6 +111,7 @@ async function payFor(env, req, a, kind, cfg, count = 1) {
       payment: { network: r.network, transaction: r.transaction, payer: r.payer, asset: r.asset, amount: r.amount, usd: x402.PRICES_USD[kind], replay: !dup.meta.changes } };
   }
   if (a) {
+    if (!(await ident.takeIpAllowance(env, req.headers.get('cf-connecting-ip') || 'local'))) return { resp: json({ error: 'daily limit for credit-paid receipts from this address reached; pay with x402 or try tomorrow' }, 429) };
     const p1 = await charge(env, a);
     if (p1 && count === 2) {
       const p2 = await charge(env, a);
@@ -127,10 +140,10 @@ export default {
       const k = await keys(env);
 
       if (req.method === 'GET' && url.pathname === '/v1/info') {
-        const n = (await env.DB.prepare('SELECT COUNT(*) AS n FROM accounts').first()).n;
+        const n = (await env.DB.prepare('SELECT COUNT(*) AS n FROM identities').first()).n;
         return json({ service: 'agent-receipts', version: '0.1.0', runtime: 'cloudflare-workers', key_id: await keyId(k.publicKey), checks: Object.keys(CHECKS), free_per_day: FREE_PER_DAY,
           payments: (() => { const c = x402.config(env); return c ? { protocol: 'x402 v2', network: c.network, asset: c.asset, pay_to: c.payTo, prices_usd: x402.PRICES_USD, note: 'Devnet unless network says mainnet. Pay with PAYMENT-SIGNATURE, no account needed.' } : { enabled: false }; })(),
-          early_program: { limit: earlyLimit, points_each: EARLY_POINTS, taken: n, open: n < earlyLimit, note: 'Points are non-transferable credits for receipts. Not a token.' } });
+          early_program: { limit: earlyLimit, points_each: EARLY_POINTS, taken: n, open: n < earlyLimit, note: 'Trial points are non-transferable credits bound to an agent key fingerprint (POST /v1/claim). Not a token. A key alone does not stop Sybil; limits only raise the cost.' } });
       }
       if (req.method === 'GET' && url.pathname === '/.well-known/receipt-key') {
         return new Response(await publicPem(k.publicKey), { headers: { 'content-type': 'application/x-pem-file' } });
@@ -138,18 +151,25 @@ export default {
       if (req.method === 'POST' && url.pathname === '/v1/accounts') {
         if (await limited(env, ip, 'acct', 5, 3600_000)) return json({ error: 'too many accounts from this address, try later' }, 429);
         const body = await req.json().catch(() => ({}));
-        const raw = 'ar_' + btoa(String.fromCharCode(...crypto.getRandomValues(new Uint8Array(24)))).replace(/\+/g, '-').replace(/\//g, '_').replace(/=/g, '');
-        const n = (await env.DB.prepare('SELECT COUNT(*) AS n FROM accounts').first()).n;
-        const early = n < earlyLimit;
-        const a = { id: 'acct_' + [...crypto.getRandomValues(new Uint8Array(6))].map((b) => b.toString(16).padStart(2, '0')).join(''), label: String(body.label || '').slice(0, 60),
-          created: new Date().toISOString(), early_rank: early ? n + 1 : null, points: early ? EARLY_POINTS : 0, day: today(), used_today: 0, total_receipts: 0 };
-        await env.DB.prepare('INSERT INTO accounts (key_hash,id,label,created,early_rank,points,day,used_today,total_receipts) VALUES (?,?,?,?,?,?,?,?,?)')
-          .bind(await sha256(raw), a.id, a.label, a.created, a.early_rank, a.points, a.day, 0, 0).run();
-        return json({ api_key: raw, account: view(a) }, 201);
+        // A bare account gets the free daily quota only. Trial points come from POST /v1/claim (identity-bound).
+        return json({ ...(await createAccount(env, body.label)), next: 'GET /v1/claim/challenge to claim trial credits with an agent key' }, 201);
+      }
+      if (req.method === 'GET' && url.pathname === '/v1/claim/challenge') {
+        if (await limited(env, ip, 'chal', 30, 60_000)) return json({ error: 'rate limit' }, 429);
+        return json(await ident.issueChallenge(env));
+      }
+      if (req.method === 'POST' && url.pathname === '/v1/claim') {
+        if (await limited(env, ip, 'claim', 10, 60_000)) return json({ error: 'rate limit' }, 429);
+        const b = await req.json().catch(() => null);
+        const existing = await accountFor(env, req);
+        const r = await ident.claim({ ...env, EARLY_LIMIT: earlyLimit }, ip, b, existing, (points, rank) => createAccount(env, b.label, points, rank));
+        return json(r.body, r.status);
       }
       if (req.method === 'GET' && url.pathname === '/v1/me') {
         const a = await accountFor(env, req);
-        return a ? json(view(a)) : json({ error: 'invalid api key' }, 401);
+        if (!a) return json({ error: 'invalid api key' }, 401);
+        const idn = await env.DB.prepare('SELECT fp FROM identities WHERE account_id = ?').bind(a.id).first();
+        return json({ ...view(a), identity: idn ? idn.fp : null });
       }
       if (req.method === 'POST' && url.pathname === '/v1/verify') {
         const a = await accountFor(env, req);

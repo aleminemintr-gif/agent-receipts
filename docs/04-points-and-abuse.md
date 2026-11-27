@@ -1,5 +1,7 @@
 # Points and abuse
 
+> Superseded in part: points are now claimed with an agent key, see [11-identity-and-credits.md](11-identity-and-credits.md).
+
 ## Design
 
 - 25 points to each of the first 10,000 accounts, once. 1 point = 1 receipt after the 5/day free quota.

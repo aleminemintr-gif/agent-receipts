@@ -1,0 +1,8 @@
+{
+  "name": "agent-credit-token",
+  "private": true,
+  "type": "module",
+  "description": "Design and devnet deployment scripts for a fixed-supply utility token that pays for receipts. Separate from the live service.",
+  "scripts": { "test": "node --test test/*.test.mjs" },
+  "dependencies": { "@solana/spl-token": "^0.4.9", "@solana/web3.js": "^1.98.0" }
+}

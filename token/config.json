@@ -1,0 +1,13 @@
+{
+  "_note": "Placeholders and proposals. The owner decides every value before anything is minted anywhere. Name and symbol are NOT chosen yet and may collide with existing tokens: check before use.",
+  "name": "Agent Receipt Credit (placeholder)",
+  "symbol": "TBD",
+  "decimals": 6,
+  "totalSupplyWholeTokens": 100000000,
+  "program": "spl-token (classic, no extensions)",
+  "mintAuthorityAfterMint": null,
+  "freezeAuthority": null,
+  "utility": "Redeemable for receipts and persistence watches at the agent-receipts service, at a price list in token units set by the operator",
+  "priceListTokenUnits": { "verify": 20, "watch": 50 },
+  "devnetGenesisHash": "EtWTRABZaYq6iMfeYKouRu166VU2xqa1"
+}

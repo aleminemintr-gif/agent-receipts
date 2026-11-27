@@ -12,6 +12,8 @@ export const TOOLS = [
       json_path: { type: 'string', description: 'Dot path into a JSON response, e.g. data.version (needs equals)' },
       equals: { description: 'Expected value at json_path' },
       claim: { type: 'string', description: 'One sentence: what you say you did' } } } },
+  { name: 'list_open_tasks', description: 'List open micro-tasks (devnet). Deliver with POST /v1/tasks/{id}/deliver using your API key.', inputSchema: { type: 'object', properties: {} } },
+  { name: 'get_badge', description: 'Fetch a verified-agent badge by id; both signatures are re-checked.', inputSchema: { type: 'object', required: ['id'], properties: { id: { type: 'string', description: 'badge_<hex>' } } } },
   { name: 'get_receipt', description: 'Fetch a receipt by id; the server re-checks its signature.',
     inputSchema: { type: 'object', required: ['id'], properties: { id: { type: 'string', description: 'Receipt id, starts with rcpt_' } } } },
 ];
@@ -44,6 +46,12 @@ export async function handleRpc(msg, { call, authorization }) {
         const x = body.receipt, st = (x.observed && x.observed.source_time) || {};
         return ok(text([`${x.passed ? 'VERIFIED' : 'NOT VERIFIED'}: ${x.claim || x.check}`, `receipt: ${x.id}`, `checked at (our clock): ${x.at}`,
           st.date ? `source clock (Date header): ${st.date}` : null, st.last_modified ? `source Last-Modified: ${st.last_modified}` : null, '', JSON.stringify(x)].filter((l) => l !== null).join('\n')));
+      }
+      if (name === 'list_open_tasks') { const res = await call('/v1/tasks?status=open', { method: 'GET' }); return ok(text(JSON.stringify(await res.json().catch(() => ({}))), res.status !== 200)); }
+      if (name === 'get_badge') {
+        if (!/^badge_[a-f0-9]+$/.test(String(args.id))) return ok(text('id must look like badge_<hex>', true));
+        const res = await call('/v1/badges/' + args.id, { method: 'GET' });
+        return ok(text(JSON.stringify(await res.json().catch(() => ({}))), res.status !== 200));
       }
       if (name === 'get_receipt') {
         if (!/^rcpt_[a-f0-9]+$/.test(String(args.id))) return ok(text('id must look like rcpt_<hex>', true));

@@ -25,3 +25,14 @@ CREATE TABLE IF NOT EXISTS roots (
 CREATE TABLE IF NOT EXISTS challenges (id TEXT PRIMARY KEY, nonce TEXT NOT NULL, bits INTEGER NOT NULL, expires INTEGER NOT NULL, used INTEGER NOT NULL DEFAULT 0);
 CREATE TABLE IF NOT EXISTS identities (fp TEXT PRIMARY KEY, account_id TEXT UNIQUE NOT NULL, pubkey TEXT NOT NULL, rank INTEGER, points INTEGER NOT NULL, ip_hash TEXT, created TEXT);
 CREATE TABLE IF NOT EXISTS ip_daily (k TEXT NOT NULL, day TEXT NOT NULL, n INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (k, day));
+CREATE TABLE IF NOT EXISTS badges (
+  id TEXT PRIMARY KEY, receipt_id TEXT UNIQUE NOT NULL, account_id TEXT NOT NULL, fp TEXT NOT NULL,
+  signature TEXT NOT NULL, internal INTEGER NOT NULL DEFAULT 0, created TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS badges_created ON badges(created);
+CREATE TABLE IF NOT EXISTS tasks (
+  id TEXT PRIMARY KEY, poster TEXT NOT NULL, title TEXT NOT NULL, description TEXT NOT NULL, check_kind TEXT NOT NULL, params TEXT NOT NULL,
+  reward_usd TEXT NOT NULL, status TEXT NOT NULL, worker TEXT, payout_address TEXT, delivery_receipt TEXT, settle_tx TEXT UNIQUE,
+  internal INTEGER NOT NULL DEFAULT 0, created TEXT NOT NULL, delivered_at TEXT, settled_at TEXT
+);
+CREATE INDEX IF NOT EXISTS tasks_status ON tasks(status, created);

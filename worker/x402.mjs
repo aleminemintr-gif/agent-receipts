@@ -3,7 +3,7 @@
 // facilitator (default: the public devnet one), which also pays the network fee.
 export const DEVNET = 'solana:EtWTRABZaYq6iMfeYKouRu166VU2xqa1';
 export const DEVNET_USDC = '4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU';
-export const PRICES_USD = { verify: '0.02', watch: '0.05' };
+export const PRICES_USD = { verify: '0.02', watch: '0.05', task: '0.01' };
 
 const b64e = (o) => btoa(unescape(encodeURIComponent(JSON.stringify(o))));
 const b64d = (s) => JSON.parse(decodeURIComponent(escape(atob(s))));
@@ -59,7 +59,7 @@ export function bazaar(kind) {
 /** Build the 402 response. Body is JSON for humans; the header is canonical x402. */
 export async function paymentRequired(cfg, kind, resourceUrl, error) {
   const req = await requirements(cfg, kind, resourceUrl);
-  const pr = { x402Version: 2, error, resource: { url: resourceUrl, description: kind === 'watch' ? 'Persistence watch (baseline + recheck receipts)' : 'One signed verification receipt', mimeType: 'application/json' }, accepts: [req], extensions: bazaar(kind) };
+  const pr = { x402Version: 2, error, resource: { url: resourceUrl, description: kind === 'watch' ? 'Persistence watch (baseline + recheck receipts)' : kind === 'task' ? 'Micro-task posting fee (flat commission)' : 'One signed verification receipt', mimeType: 'application/json' }, accepts: [req], extensions: bazaar(kind) };
   return new Response(JSON.stringify({ error, price_usd: PRICES_USD[kind], x402: pr }, null, 2), { status: 402, headers: { 'content-type': 'application/json', 'access-control-allow-origin': '*', 'access-control-expose-headers': 'PAYMENT-REQUIRED,PAYMENT-RESPONSE', 'PAYMENT-REQUIRED': b64e(pr) } });
 }
 

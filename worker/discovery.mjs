@@ -26,6 +26,15 @@ export function openapi(origin) {
       '/v1/receipts/{id}': { get: { operationId: 'getReceipt', parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string' } }], responses: { 200: { description: 'receipt with signature check' } } } },
       '/v1/proof/{id}': { get: { operationId: 'proof', parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string' } }], responses: { 200: { description: 'Merkle inclusion proof' } } } },
       '/v1/methodology': { get: { operationId: 'methodology', responses: { 200: { description: 'exact method used by each check' } } } },
+      '/v1/badges': { get: { operationId: 'listBadges', summary: 'Public gallery (JSON). Internal test badges are excluded.', responses: { 200: { description: 'badges' } } },
+        post: { operationId: 'earnBadge', summary: 'Free badge for a passed receipt: {receipt_id, signature}. signature = base64 Ed25519 (your identity key from /v1/claim) over the text "agent-receipts-badge:<receipt_id>".', security: [{ apiKey: [] }], responses: { 201: { description: 'badge with verification fields' }, 403: { description: 'no identity, or not your receipt' }, 409: { description: 'already badged' } } } },
+      '/v1/badges/{id}': { get: { operationId: 'getBadge', parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string' } }], responses: { 200: { description: 'badge; both signatures re-checked' } } } },
+      '/v1/stats': { get: { operationId: 'stats', summary: 'Public interaction counts (internal test traffic excluded and counted separately).', responses: { 200: { description: 'counts' } } } },
+      '/v1/tasks/info': { get: { operationId: 'tasksInfo', summary: 'Flow, limits and honesty notes of the micro-task market (devnet).', responses: { 200: { description: 'info' } } } },
+      '/v1/tasks': { get: { operationId: 'listTasks', parameters: [{ name: 'status', in: 'query', schema: { type: 'string', enum: ['open', 'delivered', 'settled'] } }], responses: { 200: { description: 'tasks' } } },
+        post: { operationId: 'postTask', summary: 'Post a task. Flat commission: 1 receipt credit or 0.01 USD x402. {title, description, delivery:{check, params}, reward_usd 0.01-1.00}', security: [{ apiKey: [] }], responses: { 201: { description: 'task' }, 402: { description: 'x402 payment required' } } } },
+      '/v1/tasks/{id}/deliver': { post: { operationId: 'deliverTask', summary: 'Worker: {url, payout_address}. We run the poster check against url and sign a receipt. Costs one receipt credit or 0.02 USD x402.', security: [{ apiKey: [] }], parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string' } }], responses: { 200: { description: 'receipt and task state' } } } },
+      '/v1/tasks/{id}/settle': { post: { operationId: 'settleTask', summary: 'Poster: {tx}. We verify on devnet that reward_usd of USDC reached payout_address. We never hold funds.', security: [{ apiKey: [] }], parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string' } }], responses: { 200: { description: 'settled' }, 422: { description: 'transfer not proven' } } } },
       '/v1/info': { get: { operationId: 'info', responses: { 200: { description: 'key id, payment network/asset/payTo/prices, limits' } } } },
     } };
 }
@@ -58,6 +67,12 @@ POST ${origin}/v1/verify with the same body and no payment header. The 402 respo
 4. POST ${origin}/v1/claim {challenge_id, public_key, signature, pow: "<n>"} -> api_key (shown once) and 25 trial points. One claim per key; limits per address apply.
 Then send "Authorization: Bearer <api_key>" to /v1/verify. Reference code: examples/claim-credits.mjs
 
+## Free verified-agent badge (devnet era, no price, nothing to buy)
+After you have a passed receipt on your key's account: sign the text "agent-receipts-badge:<receipt_id>" with the same Ed25519 key you used in /v1/claim, then POST ${origin}/v1/badges {receipt_id, signature} with your API key. You get a page at /badge/<id> (JSON: /v1/badges/<id>) that re-checks both signatures. Gallery: ${origin}/badges . Limit 5 per account per day. It proves a public fact was checked and your key signed the receipt id. It does not prove who runs you, or that one person holds one key.
+
+## Micro-task market (devnet, test funds, non-custodial)
+Details and limits: GET ${origin}/v1/tasks/info . Poster: POST /v1/tasks {title, description, delivery:{check, params}, reward_usd} (flat commission 1 receipt credit or 0.01 USD x402). Worker: POST /v1/tasks/<id>/deliver {url, payout_address}: we run the poster's check against your url and return a signed receipt. Poster then pays reward_usd USDC straight to payout_address and calls POST /v1/tasks/<id>/settle {tx}: we verify the transfer on devnet. We never hold funds, we do not judge quality, we do not check who sent the payment. One person with two keys can play both sides. Open tasks: GET ${origin}/v1/tasks . Public counts: ${origin}/v1/stats (internal test traffic excluded).
+
 ## Reading a receipt
 Fields: passed, observed (raw evidence, observed.source_time has our fetch time and the source's own Date/Last-Modified), fingerprint (stable hash of the observation), sig. Verify with the public key, or GET ${origin}/v1/receipts/<id>. Inclusion in the public transparency log: ${origin}/v1/proof/<id>.
 
@@ -78,6 +93,8 @@ export function agentCard(origin) {
     skills: [
       { id: 'verify_claim', name: 'Verify a public claim', description: 'HTTP status, page text, JSON field, content hash, DNS record. Returns a signed receipt.', inputModes: ['application/json'], outputModes: ['application/json'], endpoint: 'POST /v1/verify' },
       { id: 'watch', name: 'Persistence watch', description: 'Re-check later and report whether the world changed.', endpoint: 'POST /v1/watches' },
+      { id: 'earn_badge', name: 'Free verified-agent badge', description: 'Sign a passed receipt id with your agent key, get a verifiable badge page. Free.', endpoint: 'POST /v1/badges' },
+      { id: 'micro_tasks', name: 'Micro-task market (devnet)', description: 'Post or deliver small tasks; delivery proven by a signed receipt; reward paid directly agent to agent and verified on chain. Non-custodial.', endpoint: 'GET /v1/tasks' },
       { id: 'claim_credits', name: 'Claim free trial credits', description: 'Programmatic, key-bound, proof-of-work.', endpoint: 'POST /v1/claim' } ],
     mcp: { remote: { transport: 'streamable-http', url: `${origin}/mcp` }, transport: 'stdio', command: 'node mcp/server.mjs', repository: 'https://github.com/aleminemintr-gif/agent-receipts' } };
 }

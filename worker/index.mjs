@@ -1,6 +1,7 @@
 // Cloudflare Worker entry. Storage: D1. Secret: SIGNING_KEY_PKCS8_B64.
 import * as disc from './discovery.mjs';
 import { handleRpc } from './mcp-remote.mjs';
+import * as mk from './market.mjs';
 import { canonical, importPrivate, publicFromPrivate, publicPem, keyId, signReceipt, verifyReceipt, sha256 } from './receipt-web.mjs';
 import { runCheck, CHECKS, METHODS } from './checks.mjs';
 import * as x402 from './x402.mjs';
@@ -185,6 +186,141 @@ const handler = {
         const idn = await env.DB.prepare('SELECT fp FROM identities WHERE account_id = ?').bind(a.id).first();
         return json({ ...view(a), identity: idn ? idn.fp : null });
       }
+      let m;
+      // ---- Verified-agent badges (free, devnet era) ----
+      const dayStart = today() + 'T00:00:00.000Z';
+      const badgeFull = async (row) => {
+        const rrow = await env.DB.prepare('SELECT body FROM receipts WHERE id = ?').bind(row.receipt_id).first();
+        const r = rrow ? JSON.parse(rrow.body) : null;
+        const idn = await env.DB.prepare('SELECT pubkey FROM identities WHERE fp = ?').bind(row.fp).first();
+        const n = (await env.DB.prepare('SELECT COUNT(*) AS n FROM badges WHERE fp = ? AND internal = ?').bind(row.fp, row.internal).first()).n;
+        return { id: row.id, fingerprint: row.fp, receipt_id: row.receipt_id, receipt_at: r && r.at, check: r && r.check, claim: r && r.claim, passed: !!(r && r.passed),
+          receipt_signature_valid: r ? (await verifyReceipt(r, k.publicKey)).valid : false,
+          agent_signature_valid: idn ? await mk.verifyAgentSig(idn.pubkey, row.signature, mk.BADGE_MSG(row.receipt_id)) : false,
+          badges_by_key: n, internal: !!row.internal, created: row.created, page: `/badge/${row.id}` };
+      };
+      if (req.method === 'POST' && url.pathname === '/v1/badges') {
+        const a = await accountFor(env, req);
+        if (!a) return json({ error: 'API key required (Authorization: Bearer ...)' }, 401);
+        if (await limited(env, ip, 'badge', 30, 60_000)) return json({ error: 'rate limit' }, 429);
+        const b = await req.json().catch(() => null);
+        if (!b || !/^rcpt_[a-f0-9]+$/.test(String(b.receipt_id)) || !b.signature) return json({ error: `need receipt_id and signature: the base64 Ed25519 signature, by your identity key, of the text "${mk.BADGE_MSG('<receipt_id>')}"` }, 400);
+        const idn = await env.DB.prepare('SELECT fp, pubkey FROM identities WHERE account_id = ?').bind(a.id).first();
+        if (!idn) return json({ error: 'claim an identity first (GET /v1/claim/challenge, POST /v1/claim): a badge is bound to an agent key' }, 403);
+        const today_n = (await env.DB.prepare('SELECT COUNT(*) AS n FROM badges WHERE account_id = ? AND created >= ?').bind(a.id, dayStart).first()).n;
+        if (today_n >= mk.LIMITS.maxBadgesPerAccountPerDay) return json({ error: `at most ${mk.LIMITS.maxBadgesPerAccountPerDay} badges per account per day` }, 429);
+        const rrow = await env.DB.prepare('SELECT body FROM receipts WHERE id = ?').bind(b.receipt_id).first();
+        if (!rrow) return json({ error: 'receipt not found' }, 404);
+        const r = JSON.parse(rrow.body);
+        if (r.account !== a.id) return json({ error: 'this receipt was not issued to your account' }, 403);
+        if (!r.passed) return json({ error: 'only passed receipts earn a badge' }, 400);
+        if (!(await verifyReceipt(r, k.publicKey)).valid) return json({ error: 'receipt signature invalid' }, 400);
+        if (!(await mk.verifyAgentSig(idn.pubkey, String(b.signature), mk.BADGE_MSG(b.receipt_id)))) return json({ error: 'signature does not verify for your identity key' }, 400);
+        const id = 'badge_' + (await sha256(b.receipt_id)).slice(0, 20);
+        const ins = await env.DB.prepare('INSERT OR IGNORE INTO badges (id, receipt_id, account_id, fp, signature, internal, created) VALUES (?,?,?,?,?,?,?)')
+          .bind(id, b.receipt_id, a.id, idn.fp, String(b.signature), mk.isInternalLabel(a.label) ? 1 : 0, new Date().toISOString()).run();
+        if (!ins.meta.changes) return json({ error: 'this receipt already has a badge', badge: `/badge/${id}` }, 409);
+        return json(await badgeFull(await env.DB.prepare('SELECT * FROM badges WHERE id = ?').bind(id).first()), 201);
+      }
+      if (req.method === 'GET' && url.pathname === '/v1/badges') {
+        const incl = url.searchParams.get('include_internal') === '1' ? 1 : 0;
+        const rows = (await env.DB.prepare(`SELECT * FROM badges WHERE internal = 0 OR ? = 1 ORDER BY created DESC LIMIT 50`).bind(incl).all()).results;
+        return json({ badges: rows.map((x) => ({ id: x.id, fingerprint: x.fp, receipt_id: x.receipt_id, created: x.created, page: `/badge/${x.id}`, internal: !!x.internal })), note: 'Internal test badges are excluded unless include_internal=1.' });
+      }
+      if (req.method === 'GET' && (m = url.pathname.match(/^\/v1\/badges\/(badge_[a-f0-9]+)$/))) {
+        const row = await env.DB.prepare('SELECT * FROM badges WHERE id = ?').bind(m[1]).first();
+        return row ? json(await badgeFull(row)) : json({ error: 'not found' }, 404);
+      }
+      if (req.method === 'GET' && (m = url.pathname.match(/^\/badge\/(badge_[a-f0-9]+)$/))) {
+        const row = await env.DB.prepare('SELECT * FROM badges WHERE id = ?').bind(m[1]).first();
+        return row ? new Response(mk.badgeHtml(await badgeFull(row)), { headers: { 'content-type': 'text/html; charset=utf-8' } }) : new Response('not found', { status: 404 });
+      }
+      const publicStats = async () => {
+        const c = async (sql, ...p) => (await env.DB.prepare(sql).bind(...p).first()).n;
+        const t = async (st, i) => c('SELECT COUNT(*) AS n FROM tasks WHERE status = ? AND internal = ?', st, i);
+        return { badges: await c('SELECT COUNT(*) AS n FROM badges WHERE internal = 0'), tasks: { open: await t('open', 0), delivered: await t('delivered', 0), settled: await t('settled', 0) },
+          internal_excluded: { badges: await c('SELECT COUNT(*) AS n FROM badges WHERE internal = 1'), tasks: await c('SELECT COUNT(*) AS n FROM tasks WHERE internal = 1') },
+          note: 'Public counts exclude internal test traffic. Self-dealing with several keys cannot be ruled out, see docs/16.' };
+      };
+      if (req.method === 'GET' && url.pathname === '/v1/stats') return json(await publicStats());
+      if (req.method === 'GET' && url.pathname === '/badges') {
+        const rows = (await env.DB.prepare('SELECT * FROM badges WHERE internal = 0 ORDER BY created DESC LIMIT 50').all()).results;
+        return new Response(mk.galleryHtml(rows, await publicStats()), { headers: { 'content-type': 'text/html; charset=utf-8' } });
+      }
+
+      // ---- Micro-task market (non-custodial: we verify delivery and verify the on-chain payout, we never hold funds) ----
+      if (req.method === 'GET' && url.pathname === '/v1/tasks/info') return json({ limits: mk.LIMITS, flow: [
+        'POST /v1/tasks (API key; flat posting commission: 1 receipt credit or 0.01 USD x402) {title, description, delivery:{check, params}, reward_usd}',
+        'worker: POST /v1/tasks/:id/deliver (API key) {url, payout_address}: we run the poster\'s check against url and sign a receipt',
+        'poster pays reward_usd in USDC directly to payout_address (we never hold it), then POST /v1/tasks/:id/settle {tx}: we verify the transfer on devnet'],
+        honesty: ['Devnet: test funds only.', 'We prove delivery against the poster\'s check and that the payout arrived. We do not judge quality and we do not check who sent the payment.',
+          'One person with two keys can play both sides. Limits only raise the cost: open task cap, daily delivery cap, poster cannot deliver own task, reward cap, commission per post.'] });
+      if (req.method === 'POST' && url.pathname === '/v1/tasks') {
+        const a = await accountFor(env, req);
+        if (!a) return json({ error: 'API key required (Authorization: Bearer ...)' }, 401);
+        if (await limited(env, ip, 'taskpost', 20, 60_000)) return json({ error: 'rate limit' }, 429);
+        const v = mk.validateTask(await req.json().catch(() => null));
+        if (!v.ok) return json({ error: v.error }, 400);
+        const open = (await env.DB.prepare("SELECT COUNT(*) AS n FROM tasks WHERE poster = ? AND status = 'open'").bind(a.id).first()).n;
+        if (open >= mk.LIMITS.maxOpenTasksPerPoster) return json({ error: `at most ${mk.LIMITS.maxOpenTasksPerPoster} open tasks per account` }, 429);
+        const pay = await payFor(env, req, a, 'task', x402.config(env));
+        if (pay.resp) return pay.resp;
+        const id = 'task_' + [...crypto.getRandomValues(new Uint8Array(8))].map((b) => b.toString(16).padStart(2, '0')).join('');
+        await env.DB.prepare('INSERT INTO tasks (id, poster, title, description, check_kind, params, reward_usd, status, internal, created) VALUES (?,?,?,?,?,?,?,?,?,?)')
+          .bind(id, a.id, v.task.title, v.task.description, v.task.check, JSON.stringify(v.task.params), v.task.reward_usd, 'open', mk.isInternalLabel(a.label) ? 1 : 0, new Date().toISOString()).run();
+        return withSettle(json({ task: mk.taskView(await env.DB.prepare('SELECT * FROM tasks WHERE id = ?').bind(id).first()), commission_paid_with: pay.paid_with }, 201), pay.settleHeader);
+      }
+      if (req.method === 'GET' && url.pathname === '/v1/tasks') {
+        const st = ['open', 'delivered', 'settled'].includes(url.searchParams.get('status')) ? url.searchParams.get('status') : 'open';
+        const incl = url.searchParams.get('include_internal') === '1' ? 1 : 0;
+        const rows = (await env.DB.prepare('SELECT * FROM tasks WHERE status = ? AND (internal = 0 OR ? = 1) ORDER BY created DESC LIMIT 50').bind(st, incl).all()).results;
+        return json({ tasks: rows.map(mk.taskView), note: 'Internal test tasks are excluded unless include_internal=1.' });
+      }
+      if (req.method === 'GET' && (m = url.pathname.match(/^\/v1\/tasks\/(task_[a-f0-9]+)$/))) {
+        const row = await env.DB.prepare('SELECT * FROM tasks WHERE id = ?').bind(m[1]).first();
+        return row ? json({ task: mk.taskView(row) }) : json({ error: 'not found' }, 404);
+      }
+      if (req.method === 'POST' && (m = url.pathname.match(/^\/v1\/tasks\/(task_[a-f0-9]+)\/deliver$/))) {
+        const a = await accountFor(env, req);
+        if (!a) return json({ error: 'API key required (Authorization: Bearer ...)' }, 401);
+        if (await limited(env, ip, 'taskdeliver', 20, 60_000)) return json({ error: 'rate limit' }, 429);
+        const t = await env.DB.prepare('SELECT * FROM tasks WHERE id = ?').bind(m[1]).first();
+        if (!t) return json({ error: 'not found' }, 404);
+        if (t.status !== 'open') return json({ error: 'task is not open' }, 409);
+        if (t.poster === a.id) return json({ error: 'the poster cannot deliver their own task' }, 403);
+        const b = await req.json().catch(() => null);
+        if (!b || typeof b.url !== 'string' || !mk.isSolAddress(b.payout_address)) return json({ error: 'need url (public URL of the deliverable) and payout_address (Solana address)' }, 400);
+        const done = (await env.DB.prepare("SELECT COUNT(*) AS n FROM tasks WHERE worker = ? AND delivered_at >= ?").bind(a.id, dayStart).first()).n;
+        if (done >= mk.LIMITS.maxDeliveriesPerWorkerPerDay) return json({ error: `at most ${mk.LIMITS.maxDeliveriesPerWorkerPerDay} delivered tasks per account per day` }, 429);
+        const pay = await payFor(env, req, a, 'verify', x402.config(env));
+        if (pay.resp) return pay.resp;
+        const receipt = await runAndSign(env, k, a.id, { check: t.check_kind, params: { ...JSON.parse(t.params), url: b.url }, claim: `task ${t.id} delivered`, paid_with: pay.paid_with, extra: { task: t.id } }, allowPrivate);
+        let task = t;
+        if (receipt.passed) {
+          const up = await env.DB.prepare("UPDATE tasks SET status='delivered', worker=?, payout_address=?, delivery_receipt=?, delivered_at=? WHERE id=? AND status='open'").bind(a.id, b.payout_address, receipt.id, new Date().toISOString(), t.id).run();
+          if (!up.meta.changes) return json({ error: 'task was delivered by someone else first', receipt }, 409);
+          task = await env.DB.prepare('SELECT * FROM tasks WHERE id = ?').bind(t.id).first();
+        }
+        return withSettle(json({ task: mk.taskView(task), receipt, delivered: receipt.passed, next: receipt.passed ? 'the poster pays the reward to payout_address, then POST /v1/tasks/:id/settle' : 'the check failed; task stays open, you may retry (each attempt uses a receipt credit)' }), pay.settleHeader);
+      }
+      if (req.method === 'POST' && (m = url.pathname.match(/^\/v1\/tasks\/(task_[a-f0-9]+)\/settle$/))) {
+        const a = await accountFor(env, req);
+        if (!a) return json({ error: 'API key required (Authorization: Bearer ...)' }, 401);
+        if (await limited(env, ip, 'tasksettle', 20, 60_000)) return json({ error: 'rate limit' }, 429);
+        const t = await env.DB.prepare('SELECT * FROM tasks WHERE id = ?').bind(m[1]).first();
+        if (!t) return json({ error: 'not found' }, 404);
+        if (t.poster !== a.id) return json({ error: 'only the poster can settle' }, 403);
+        if (t.status !== 'delivered') return json({ error: 'task is not in delivered state' }, 409);
+        const b = await req.json().catch(() => null);
+        if (!b || !/^[1-9A-HJ-NP-Za-km-z]{60,100}$/.test(String(b.tx))) return json({ error: 'need tx: the Solana devnet transaction signature of the payout' }, 400);
+        const cfg = x402.config(env);
+        const chk = await mk.checkSolTransfer(env, b.tx, t.payout_address, t.reward_usd, cfg ? cfg.asset : x402.DEVNET_USDC).catch((e) => ({ ok: false, reason: 'rpc error: ' + e.message }));
+        if (!chk.ok) return json({ error: chk.reason }, 422);
+        const up = await env.DB.prepare("UPDATE tasks SET status='settled', settle_tx=?, settled_at=? WHERE id=? AND status='delivered'").bind(b.tx, new Date().toISOString(), t.id).run().catch(() => ({ meta: { changes: 0 } }));
+        if (!up.meta.changes) return json({ error: 'could not settle: this tx may already settle another task' }, 409);
+        return json({ task: mk.taskView(await env.DB.prepare('SELECT * FROM tasks WHERE id = ?').bind(t.id).first()), received_base_units: chk.received });
+      }
+
       // No-signup trial: signed receipt, no key. Limited checks, per-address and global hourly caps (free-tier protection).
       if (req.method === 'POST' && url.pathname === '/v1/try') {
         if (await limited(env, ip, 'try', TRY_PER_IP_HOUR, 3600_000)) return json({ error: `try-it limit reached (${TRY_PER_IP_HOUR} per hour per address). Create a free account (POST /v1/accounts) for more.` }, 429);
@@ -204,7 +340,6 @@ const handler = {
         const receipt = await runAndSign(env, k, pay.accountId, { check: body.check, params: body.params, claim: body.claim, paid_with: pay.paid_with, extra: pay.payment ? { payment: pay.payment } : {} }, allowPrivate);
         return withSettle(json({ receipt, verify_url: `/v1/receipts/${receipt.id}` }), pay.settleHeader);
       }
-      let m;
       if (req.method === 'GET' && url.pathname === '/v1/log') return json(await tlog.logPage(env, Number(url.searchParams.get('after') || 0), Number(url.searchParams.get('limit') || 100)));
       if (req.method === 'GET' && url.pathname === '/v1/roots') {
         const rows = (await env.DB.prepare('SELECT day FROM roots ORDER BY day DESC LIMIT 60').all()).results;

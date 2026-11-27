@@ -54,6 +54,10 @@ const realFetch = globalThis.fetch;
 test.before(() => {
   globalThis.fetch = async (u, init) => {
     if (String(u) === 'https://site.test/') return new Response(globalThis.__page || 'hello deployed page', { status: 200, headers: { 'content-type': 'text/html', etag: 'abc', 'last-modified': globalThis.__lm || 'x', date: 'Fri, 27 Nov 2026 19:00:00 GMT' } });
+    if (String(u) === 'https://rpc.test') {
+      const t = globalThis.__tx;
+      return Response.json({ result: t ? { blockTime: 1, meta: { err: null, preTokenBalances: [], postTokenBalances: [{ owner: t.owner, mint: '4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU', uiTokenAmount: { amount: String(t.amount) } }] } } : null });
+    }
     if (String(u) === 'https://site.test/missing') return new Response('no', { status: 404 });
     if (String(u) === 'https://fac.test/supported') return Response.json({ kinds: [{ x402Version: 2, scheme: 'exact', network: 'solana:EtWTRABZaYq6iMfeYKouRu166VU2xqa1', extra: { feePayer: 'FeePayer1111111111111111111111111111111111' } }] });
     if (String(u) === 'https://fac.test/verify') { globalThis.__fac.push(['verify', JSON.parse(init.body)]); return Response.json(globalThis.__facOk === false ? { isValid: false, invalidReason: 'insufficient_funds' } : { isValid: true, payer: 'PayerWallet' }); }
@@ -426,7 +430,7 @@ test('remote mcp: initialize, list, verify_claim via try, get_receipt, bad reque
   const rpc = async (body, hdr = {}) => { const r = await worker.fetch(new Request('https://ar.test/mcp', { method: 'POST', body: JSON.stringify(body), headers: { 'cf-connecting-ip': '6.6.6.6', ...hdr } }), e); return { status: r.status, body: r.status === 202 ? null : await r.json() }; };
   assert.equal((await rpc({ jsonrpc: '2.0', id: 1, method: 'initialize', params: {} })).body.result.serverInfo.name, 'agent-receipts');
   assert.equal((await rpc({ jsonrpc: '2.0', method: 'notifications/initialized' })).status, 202);
-  assert.deepEqual((await rpc({ jsonrpc: '2.0', id: 2, method: 'tools/list' })).body.result.tools.map((t) => t.name), ['verify_claim', 'get_receipt']);
+  assert.deepEqual((await rpc({ jsonrpc: '2.0', id: 2, method: 'tools/list' })).body.result.tools.map((t) => t.name), ['verify_claim', 'list_open_tasks', 'get_badge', 'get_receipt']);
   const v = (await rpc({ jsonrpc: '2.0', id: 3, method: 'tools/call', params: { name: 'verify_claim', arguments: { url: 'https://site.test/', contains: 'hello', claim: 'page live' } } })).body.result;
   assert.match(v.content[0].text, /^VERIFIED/);
   const id = v.content[0].text.match(/rcpt_[a-f0-9]+/)[0];
@@ -465,4 +469,93 @@ test('recent: receipts before PUBLIC_TABLE_FROM are hidden from the public table
   const { body } = await call(e, '/v1/accounts', { method: 'POST', body: {} });
   await call(e, '/v1/verify', { method: 'POST', key: body.api_key, body: { check: 'http_status', claim: 'old test', params: { url: 'https://site.test/' } } });
   assert.equal((await call(e, '/v1/recent')).body.receipts.length, 0);
+});
+
+
+// ---- badges and tasks ----
+const PAYOUT = 'ARcYk3J3iBnJZMduVevMS7jsYh7puQtXH9WN8FtAjAbJ';
+let ipn = 20;
+async function agent(e, label) {
+  const kp = generateKeyPairSync('ed25519');
+  const r = await claimIdentity(e, { kp, ip: '10.0.0.' + ipn++, mutate: label ? (b) => ({ ...b, label }) : undefined });
+  assert.equal(r.status, 201);
+  return { kp, key: r.body.api_key };
+}
+const sign = (kp, msg) => edSign(null, Buffer.from(msg), kp.privateKey).toString('base64');
+const verifyOne = async (e, key, claim = 'c') => (await call(e, '/v1/verify', { method: 'POST', key, body: { check: 'http_status', claim, params: { url: 'https://site.test/' } } })).body.receipt;
+
+test('badges: bound to an agent key and a passed receipt, verifiable page, internal excluded from the gallery', async () => {
+  const e = env();
+  const A = await agent(e), I = await agent(e, 'internal-dogfood');
+  const r = await verifyOne(e, A.key, 'I deployed it');
+  const ok = await call(e, '/v1/badges', { method: 'POST', key: A.key, body: { receipt_id: r.id, signature: sign(A.kp, 'agent-receipts-badge:' + r.id) } });
+  assert.equal(ok.status, 201);
+  assert.equal(ok.body.receipt_signature_valid, true); assert.equal(ok.body.agent_signature_valid, true); assert.equal(ok.body.passed, true);
+  const html = await (await worker.fetch(new Request('https://ar.test/badge/' + ok.body.id), e)).text();
+  assert.match(html, /Receipt signature: <span class="ok">valid/); assert.match(html, /Not for sale/);
+  assert.equal((await call(e, '/v1/badges', { method: 'POST', key: A.key, body: { receipt_id: r.id, signature: sign(A.kp, 'agent-receipts-badge:' + r.id) } })).status, 409);
+  const r2 = await verifyOne(e, A.key);
+  assert.equal((await call(e, '/v1/badges', { method: 'POST', key: A.key, body: { receipt_id: r2.id, signature: sign(A.kp, 'wrong') } })).status, 400);
+  assert.equal((await call(e, '/v1/badges', { method: 'POST', key: I.key, body: { receipt_id: r2.id, signature: sign(I.kp, 'agent-receipts-badge:' + r2.id) } })).status, 403, 'not their receipt');
+  const bare = (await call(e, '/v1/accounts', { method: 'POST', body: {} })).body.api_key;
+  const rb = await verifyOne(e, bare);
+  assert.equal((await call(e, '/v1/badges', { method: 'POST', key: bare, body: { receipt_id: rb.id, signature: 'x' } })).status, 403, 'no identity');
+  const ri = await verifyOne(e, I.key);
+  assert.equal((await call(e, '/v1/badges', { method: 'POST', key: I.key, body: { receipt_id: ri.id, signature: sign(I.kp, 'agent-receipts-badge:' + ri.id) } })).status, 201);
+  assert.equal((await call(e, '/v1/badges')).body.badges.length, 1);
+  assert.equal((await call(e, '/v1/badges?include_internal=1')).body.badges.length, 2);
+  const st = (await call(e, '/v1/stats')).body;
+  assert.equal(st.badges, 1); assert.equal(st.internal_excluded.badges, 1);
+  const gal = await (await worker.fetch(new Request('https://ar.test/badges'), e)).text();
+  assert.ok(gal.includes(ok.body.id)); assert.ok(!gal.includes('internal-dogfood'));
+});
+
+test('tasks: post, deliver against the poster check, settle with an on-chain transfer, limits hold', async () => {
+  const e = { ...env(), SOLANA_RPC: 'https://rpc.test', PAY_TO: PAYOUT };
+  const P = await agent(e), W = await agent(e), I = await agent(e, 'internal-dogfood');
+  const mk = (extra = {}, key = P.key) => call(e, '/v1/tasks', { method: 'POST', key, body: { title: 'Publish a marker page', description: 'Host a page that contains the marker text.', delivery: { check: 'http_contains', params: { text: 'hello deployed' } }, reward_usd: 0.05, ...extra } });
+  assert.equal((await call(e, '/v1/tasks', { method: 'POST', body: {} })).status, 401);
+  assert.equal((await mk({ reward_usd: 5 })).status, 400);
+  assert.equal((await mk({ delivery: { check: 'dns_record', params: {} } })).status, 400);
+  const t1 = await mk(); assert.equal(t1.status, 201); assert.equal(t1.body.task.status, 'open');
+  const id = t1.body.task.id;
+  const dv = (key, body, tid = id) => call(e, `/v1/tasks/${tid}/deliver`, { method: 'POST', key, body });
+  assert.equal((await dv(P.key, { url: 'https://site.test/', payout_address: PAYOUT })).status, 403, 'poster cannot deliver own task');
+  assert.equal((await dv(W.key, { url: 'https://site.test/', payout_address: 'nope' })).status, 400);
+  const t2 = await mk({ delivery: { check: 'http_contains', params: { text: 'never on that page' } } });
+  const bad = await dv(W.key, { url: 'https://site.test/', payout_address: PAYOUT }, t2.body.task.id);
+  assert.equal(bad.body.delivered, false); assert.equal(bad.body.task.status, 'open');
+  const good = await dv(W.key, { url: 'https://site.test/', payout_address: PAYOUT });
+  assert.equal(good.status, 200); assert.equal(good.body.delivered, true); assert.equal(good.body.task.status, 'delivered');
+  assert.ok(good.body.receipt.sig); assert.equal((await dv(W.key, { url: 'https://site.test/', payout_address: PAYOUT })).status, 409);
+  const TX = '5'.repeat(87);
+  const settle = (key, tx = TX, tid = id) => call(e, `/v1/tasks/${tid}/settle`, { method: 'POST', key, body: { tx } });
+  assert.equal((await settle(W.key)).status, 403, 'only the poster settles');
+  globalThis.__tx = null; assert.equal((await settle(P.key)).status, 422);
+  globalThis.__tx = { owner: PAYOUT, amount: 1000 }; assert.equal((await settle(P.key)).status, 422, 'too little arrived');
+  globalThis.__tx = { owner: 'SomeoneElse1111111111111111111111111111111', amount: 50000 }; assert.equal((await settle(P.key)).status, 422, 'wrong recipient');
+  globalThis.__tx = { owner: PAYOUT, amount: 50000 };
+  const done = await settle(P.key); assert.equal(done.status, 200); assert.equal(done.body.task.status, 'settled'); assert.match(done.body.task.settle_explorer, /cluster=devnet/);
+  // the same tx cannot settle a second task
+  const t3 = await mk(); await dv(W.key, { url: 'https://site.test/', payout_address: PAYOUT }, t3.body.task.id);
+  assert.equal((await settle(P.key, TX, t3.body.task.id)).status, 409);
+  // open cap
+  await mk(); const capped = await mk(); await mk(); const over = await mk();
+  assert.ok([201, 429].includes(capped.status)); assert.equal(over.status, 429);
+  // internal tagging stays out of public views
+  const it = await mk({}, I.key); assert.equal(it.body.task.internal, true);
+  const pub = (await call(e, '/v1/tasks?status=open')).body.tasks; assert.ok(!pub.some((x) => x.id === it.body.task.id));
+  assert.ok((await call(e, '/v1/tasks?status=open&include_internal=1')).body.tasks.some((x) => x.id === it.body.task.id));
+  const st = (await call(e, '/v1/stats')).body; assert.equal(st.tasks.settled, 1); assert.ok(st.internal_excluded.tasks >= 1);
+  delete globalThis.__tx;
+});
+
+test('discovery lists badges and tasks', async () => {
+  const e = env();
+  const spec = await (await worker.fetch(new Request('https://ar.test/openapi.json'), e)).json();
+  for (const p of ['/v1/badges', '/v1/tasks', '/v1/tasks/{id}/deliver', '/v1/tasks/{id}/settle', '/v1/stats']) assert.ok(spec.paths[p], p);
+  const txt = await (await worker.fetch(new Request('https://ar.test/llms.txt'), e)).text();
+  assert.match(txt, /\/v1\/badges/); assert.match(txt, /\/v1\/tasks/);
+  const card = await (await worker.fetch(new Request('https://ar.test/.well-known/agent.json'), e)).json();
+  assert.ok(card.skills.some((x) => x.id === 'earn_badge')); assert.ok(card.skills.some((x) => x.id === 'micro_tasks'));
 });

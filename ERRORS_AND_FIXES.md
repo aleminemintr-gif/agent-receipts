@@ -18,3 +18,6 @@ A running log of what broke while building this and how it was fixed.
 | 12 | Test for two sealed days produced one root | Test changed a receipt's date after a leaf row had been created, so the leaf kept the old day | Test updates the leaf row too. Not a production path (a receipt's `at` never changes) |
 | 13 | Known limit, not fixed: two receipts created at the same instant can share a `prev` | `prev` is read before insert, no lock | Documented in docs/10. The daily Merkle root is the integrity anchor, `prev` is a convenience chain |
 | 14 | Existing tests assumed accounts get 25 points on creation | Credits moved to the identity claim | Tests use a claim helper (signature + proof of work); bare accounts get free quota only |
+
+## 15. Token work scope reversed twice
+Cause: the instruction changed from "cancel coin work" to "build devnet-only utility token tech". Fix: acted only on the later one after checking the owner's own message; the earlier sandbox code was never pushed. Scope kept: devnet only, no mainnet script, no sale, no liquidity, no price claims.

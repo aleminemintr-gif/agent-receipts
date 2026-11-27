@@ -48,6 +48,9 @@ Dev only: `ALLOW_PRIVATE=1 npm start` lets checks hit localhost (used for demos)
 | GET | `/v1/receipts/:id` | Stored receipt plus signature check. |
 | POST | `/v1/receipts/verify` | Verify any receipt body. |
 | GET | `/.well-known/receipt-key` | Public key (PEM). |
+| POST | `/v1/watches` | Persistence check: baseline now, recheck after N minutes (5-1440), drift verdict. Costs 2 receipts. |
+| GET | `/v1/watches/:id` | Status and drift verdict (owner only). |
+| GET | `/v1/methodology` | How each check works and how to reproduce it. |
 | GET | `/v1/info`, `/v1/recent` | Service info, last 10 receipts (claims only). |
 
 Checks: `http_status`, `http_contains`, `json_field`, `content_hash`, `dns_record`. Params are in [docs/02-architecture.md](docs/02-architecture.md).
@@ -65,6 +68,7 @@ First 10,000 accounts get 25 points once. A point buys one receipt after the fre
 - [05 Risks](docs/05-risks.md)
 - [06 Roadmap](docs/06-roadmap.md)
 - [07 Free-tier deployment](docs/07-deployment.md)
+- [08 Methodology and receipt fields](docs/08-methodology.md)
 - [ERRORS_AND_FIXES.md](ERRORS_AND_FIXES.md)
 
 ## Principles

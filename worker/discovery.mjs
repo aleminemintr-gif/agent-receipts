@@ -60,7 +60,8 @@ Then send "Authorization: Bearer <api_key>" to /v1/verify. Reference code: examp
 Fields: passed, observed (raw evidence, observed.source_time has our fetch time and the source's own Date/Last-Modified), fingerprint (stable hash of the observation), sig. Verify with the public key, or GET ${origin}/v1/receipts/<id>. Inclusion in the public transparency log: ${origin}/v1/proof/<id>.
 
 ## MCP
-Run \`node mcp/server.mjs\` from the repo (stdio, no dependencies). Tools: verify_claim, claim_credits, get_receipt.
+Remote (streamable HTTP, no install): POST ${origin}/mcp . Add "Authorization: Bearer <api_key>" to use your credits; without it the limited trial path is used. Tools: verify_claim, get_receipt.
+Local stdio: \`node mcp/server.mjs\` from the repo (stdio, no dependencies). Tools: verify_claim, claim_credits, get_receipt.
 
 ## Limits and honesty
 Public URLs only (private addresses are refused, workers.dev targets cannot be fetched). The source's timestamps are the source's claims. This is not a legal or financial attestation.
@@ -76,5 +77,5 @@ export function agentCard(origin) {
       { id: 'verify_claim', name: 'Verify a public claim', description: 'HTTP status, page text, JSON field, content hash, DNS record. Returns a signed receipt.', inputModes: ['application/json'], outputModes: ['application/json'], endpoint: 'POST /v1/verify' },
       { id: 'watch', name: 'Persistence watch', description: 'Re-check later and report whether the world changed.', endpoint: 'POST /v1/watches' },
       { id: 'claim_credits', name: 'Claim free trial credits', description: 'Programmatic, key-bound, proof-of-work.', endpoint: 'POST /v1/claim' } ],
-    mcp: { transport: 'stdio', command: 'node mcp/server.mjs', repository: 'https://github.com/aleminemintr-gif/agent-receipts' } };
+    mcp: { remote: { transport: 'streamable-http', url: `${origin}/mcp` }, transport: 'stdio', command: 'node mcp/server.mjs', repository: 'https://github.com/aleminemintr-gif/agent-receipts' } };
 }

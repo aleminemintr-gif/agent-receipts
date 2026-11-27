@@ -1,5 +1,6 @@
 // Cloudflare Worker entry. Storage: D1. Secret: SIGNING_KEY_PKCS8_B64.
 import * as disc from './discovery.mjs';
+import { handleRpc } from './mcp-remote.mjs';
 import { canonical, importPrivate, publicFromPrivate, publicPem, keyId, signReceipt, verifyReceipt, sha256 } from './receipt-web.mjs';
 import { runCheck, CHECKS, METHODS } from './checks.mjs';
 import * as x402 from './x402.mjs';
@@ -128,7 +129,7 @@ async function payFor(env, req, a, kind, cfg, count = 1) {
 }
 const withSettle = (resp, h) => { if (h) resp.headers.set('PAYMENT-RESPONSE', h); resp.headers.set('access-control-expose-headers', 'PAYMENT-RESPONSE'); return resp; };
 
-export default {
+const handler = {
   async scheduled(event, env, ctx) {
     ctx.waitUntil((async () => { await processDueWatches(env); await tlog.closeDays(env, await keys(env)); })());
   },
@@ -147,6 +148,13 @@ export default {
         return json({ service: 'agent-receipts', version: '0.1.0', runtime: 'cloudflare-workers', key_id: await keyId(k.publicKey), checks: Object.keys(CHECKS), free_per_day: FREE_PER_DAY,
           payments: (() => { const c = x402.config(env); return c ? { protocol: 'x402 v2', network: c.network, asset: c.asset, pay_to: c.payTo, prices_usd: x402.PRICES_USD, note: 'Devnet unless network says mainnet. Pay with PAYMENT-SIGNATURE, no account needed.' } : { enabled: false }; })(),
           early_program: { limit: earlyLimit, points_each: EARLY_POINTS, taken: n, open: n < earlyLimit, note: 'Trial points are non-transferable credits bound to an agent key fingerprint (POST /v1/claim). Not a token. A key alone does not stop Sybil; limits only raise the cost.' } });
+      }
+      if (url.pathname === '/mcp') {
+        if (req.method !== 'POST') return json({ error: 'POST JSON-RPC to /mcp (streamable HTTP, JSON responses)' }, 405);
+        const msg = await req.json().catch(() => null);
+        const call = (p, init = {}) => handler.fetch(new Request(url.origin + p, { ...init, headers: { ...(init.headers || {}), 'cf-connecting-ip': ip } }), env);
+        const out = await handleRpc(msg, { call, authorization: req.headers.get('authorization') || '' });
+        return out ? new Response(JSON.stringify(out), { headers: { 'content-type': 'application/json', 'access-control-allow-origin': '*' } }) : new Response(null, { status: 202 });
       }
       if (req.method === 'GET' && url.pathname === '/openapi.json') return new Response(JSON.stringify(disc.openapi(url.origin), null, 1), { headers: { 'content-type': 'application/json', 'access-control-allow-origin': '*' } });
       if (req.method === 'GET' && url.pathname === '/llms.txt') return new Response(disc.llmsTxt(url.origin), { headers: { 'content-type': 'text/plain; charset=utf-8', 'access-control-allow-origin': '*' } });
@@ -272,3 +280,4 @@ export default {
     }
   },
 };
+export default handler;

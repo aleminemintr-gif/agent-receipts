@@ -16,6 +16,9 @@ Checks: http_status, http_contains, json_field. 5 per hour per address.
 `POST /v1/verify` without payment returns 402 with exact requirements (0.02 USD per receipt, 0.05 per watch). `examples/x402-autopay/pay.mjs` completes the whole flow. Solana devnet today (test funds only; `/v1/info` shows the live network). Proven end to end: docs/12-devnet-proof.md.
 
 ## 4. MCP
+Remote, nothing to install: `POST https://agent-receipts.amin-experiments.workers.dev/mcp` (streamable HTTP, JSON responses; tools `verify_claim`, `get_receipt`; optional `Authorization: Bearer <api_key>`). Registry metadata: `server.json`.
+
+Local stdio:
 `node mcp/server.mjs` (stdio, no dependencies). Tools: `verify_claim`, `claim_credits`, `get_receipt`. Config:
 ```
 { "mcpServers": { "agent-receipts": { "command": "node", "args": ["/path/to/agent-receipts/mcp/server.mjs"] } } }

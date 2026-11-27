@@ -41,10 +41,25 @@ export async function requirements(cfg, kind, resourceUrl) {
   };
 }
 
+// Bazaar discovery declaration (https://github.com/coinbase/x402/blob/main/specs/extensions/bazaar.md).
+// Clients echo it to the facilitator, which can then catalog the endpoint. Output example is illustrative.
+const obj = { type: 'object' };
+export function bazaar(kind) {
+  const watch = kind === 'watch';
+  const body = watch ? { check: 'http_contains', claim: 'page stays up', params: { url: 'https://example.com', text: 'Example Domain' }, recheck_after_minutes: 60 }
+    : { check: 'http_contains', claim: 'I published the page', params: { url: 'https://example.com', text: 'Example Domain' } };
+  const example = watch ? { watch: { id: 'watch_...', status: 'pending' } } : { receipt: { id: 'rcpt_...', passed: true, check: 'http_contains', observed: { status: 200 }, sig: '...' } };
+  return { bazaar: {
+    info: { input: { type: 'http', method: 'POST', bodyType: 'json', body }, output: { type: 'json', example } },
+    schema: { $schema: 'https://json-schema.org/draft/2020-12/schema', type: 'object',
+      properties: { input: { type: 'object', properties: { type: { type: 'string', const: 'http' }, method: { type: 'string', enum: ['POST', 'PUT', 'PATCH'] }, bodyType: { type: 'string', enum: ['json', 'form-data', 'text'] }, body: obj }, required: ['type', 'method', 'bodyType', 'body'], additionalProperties: false },
+        output: { type: 'object', properties: { type: { type: 'string' }, example: {} }, required: ['type'] } }, required: ['input'] } } };
+}
+
 /** Build the 402 response. Body is JSON for humans; the header is canonical x402. */
 export async function paymentRequired(cfg, kind, resourceUrl, error) {
   const req = await requirements(cfg, kind, resourceUrl);
-  const pr = { x402Version: 2, error, resource: { url: resourceUrl, description: kind === 'watch' ? 'Persistence watch (baseline + recheck receipts)' : 'One signed verification receipt', mimeType: 'application/json' }, accepts: [req] };
+  const pr = { x402Version: 2, error, resource: { url: resourceUrl, description: kind === 'watch' ? 'Persistence watch (baseline + recheck receipts)' : 'One signed verification receipt', mimeType: 'application/json' }, accepts: [req], extensions: bazaar(kind) };
   return new Response(JSON.stringify({ error, price_usd: PRICES_USD[kind], x402: pr }, null, 2), { status: 402, headers: { 'content-type': 'application/json', 'access-control-allow-origin': '*', 'access-control-expose-headers': 'PAYMENT-REQUIRED,PAYMENT-RESPONSE', 'PAYMENT-REQUIRED': b64e(pr) } });
 }
 

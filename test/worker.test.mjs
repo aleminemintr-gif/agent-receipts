@@ -420,3 +420,33 @@ test('discovery: openapi, llms.txt and agent card are served and consistent with
   assert.equal(card.name, 'agent-receipts'); assert.ok(card.skills.length >= 3);
   assert.ok(card.authentication.some((a) => a.type === 'x402'));
 });
+
+test('remote mcp: initialize, list, verify_claim via try, get_receipt, bad requests', async () => {
+  const e = env();
+  const rpc = async (body, hdr = {}) => { const r = await worker.fetch(new Request('https://ar.test/mcp', { method: 'POST', body: JSON.stringify(body), headers: { 'cf-connecting-ip': '6.6.6.6', ...hdr } }), e); return { status: r.status, body: r.status === 202 ? null : await r.json() }; };
+  assert.equal((await rpc({ jsonrpc: '2.0', id: 1, method: 'initialize', params: {} })).body.result.serverInfo.name, 'agent-receipts');
+  assert.equal((await rpc({ jsonrpc: '2.0', method: 'notifications/initialized' })).status, 202);
+  assert.deepEqual((await rpc({ jsonrpc: '2.0', id: 2, method: 'tools/list' })).body.result.tools.map((t) => t.name), ['verify_claim', 'get_receipt']);
+  const v = (await rpc({ jsonrpc: '2.0', id: 3, method: 'tools/call', params: { name: 'verify_claim', arguments: { url: 'https://site.test/', contains: 'hello', claim: 'page live' } } })).body.result;
+  assert.match(v.content[0].text, /^VERIFIED/);
+  const id = v.content[0].text.match(/rcpt_[a-f0-9]+/)[0];
+  const g = (await rpc({ jsonrpc: '2.0', id: 4, method: 'tools/call', params: { name: 'get_receipt', arguments: { id } } })).body.result;
+  assert.equal(g.isError, false);
+  assert.equal((await rpc({ jsonrpc: '2.0', id: 5, method: 'tools/call', params: { name: 'get_receipt', arguments: { id: 'x' } } })).body.result.isError, true);
+  assert.equal((await rpc({ jsonrpc: '2.0', id: 6, method: 'nope' })).body.error.code, -32601);
+  assert.equal((await rpc({ nonsense: true })).body.error.code, -32600);
+  const get = await worker.fetch(new Request('https://ar.test/mcp'), e);
+  assert.equal(get.status, 405);
+});
+
+test('402 carries the bazaar discovery declaration in header and body', async () => {
+  const e = payEnv();
+  const r = await raw(e, '/v1/verify', { body: { check: 'http_status', params: { url: 'https://site.test/' } } });
+  assert.equal(r.status, 402);
+  const pr = JSON.parse(Buffer.from(r.headers.get('payment-required'), 'base64').toString());
+  const bz = pr.extensions.bazaar;
+  assert.equal(bz.info.input.method, 'POST'); assert.equal(bz.info.input.bodyType, 'json'); assert.equal(bz.info.input.body.check, 'http_contains');
+  assert.equal(bz.info.output.type, 'json'); assert.equal(bz.schema.type, 'object');
+  const w = await raw(e, '/v1/watches', { body: { check: 'http_status', params: { url: 'https://site.test/' }, recheck_after_minutes: 5 } });
+  assert.equal(JSON.parse(Buffer.from(w.headers.get('payment-required'), 'base64').toString()).extensions.bazaar.info.input.body.recheck_after_minutes, 60);
+});

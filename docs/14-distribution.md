@@ -31,3 +31,7 @@ Needs from the owner: nothing. Needs from us: add `extensions.bazaar` (input/out
 
 ## Account and signature needs
 Owner: GitHub login for mcp-publisher (device approval) and for any PR under his account; npm account only if a package route is chosen; an email for x402 List. No wallet signature is needed for listing, but Bazaar cataloging needs a real settled mainnet payment, which is the owner's wallet and decision.
+
+## Update (built, not submitted)
+- Remote MCP endpoint `/mcp` and `server.json` (remote-only entry for the Official MCP Registry) exist. Publishing still needs the owner's GitHub login.
+- The 402 response now carries the `bazaar` extension (header and body).

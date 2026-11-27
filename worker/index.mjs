@@ -1,6 +1,7 @@
 // Cloudflare Worker entry. Storage: D1. Secret: SIGNING_KEY_PKCS8_B64.
 import { canonical, importPrivate, publicFromPrivate, publicPem, keyId, signReceipt, verifyReceipt, sha256 } from './receipt-web.mjs';
 import { runCheck, CHECKS, METHODS } from './checks.mjs';
+import * as x402 from './x402.mjs';
 
 const EARLY_LIMIT = 10_000, EARLY_POINTS = 25, FREE_PER_DAY = 5;
 const today = () => new Date().toISOString().slice(0, 10);
@@ -79,6 +80,32 @@ async function processDueWatches(env) {
   return due.length;
 }
 
+// Decide how this call is paid. Returns {resp} to stop, or {paid_with, accountId, payment?}.
+async function payFor(env, req, a, kind, cfg, count = 1) {
+  const resourceUrl = new URL(req.url).origin + new URL(req.url).pathname;
+  const header = req.headers.get('payment-signature');
+  if (header && cfg) {
+    const r = await x402.settle(cfg, kind, resourceUrl, header).catch((e) => ({ ok: false, reason: 'facilitator error: ' + e.message }));
+    if (!r.ok) return { resp: await x402.paymentRequired(cfg, kind, resourceUrl, r.reason) };
+    const dup = await env.DB.prepare('INSERT OR IGNORE INTO payments (tx, payer, network, asset, amount, kind, account_id, at) VALUES (?,?,?,?,?,?,?,?)')
+      .bind(r.transaction, r.payer || '', r.network, r.asset, r.amount, kind, a ? a.id : 'anon', new Date().toISOString()).run();
+    return { paid_with: 'x402', accountId: a ? a.id : 'anon', settleHeader: r.header,
+      payment: { network: r.network, transaction: r.transaction, payer: r.payer, asset: r.asset, amount: r.amount, usd: x402.PRICES_USD[kind], replay: !dup.meta.changes } };
+  }
+  if (a) {
+    const p1 = await charge(env, a);
+    if (p1 && count === 2) {
+      const p2 = await charge(env, a);
+      if (!p2) { await refund(env, a.key_hash, p1); return cfg ? { resp: await x402.paymentRequired(cfg, kind, resourceUrl, 'no free receipts or points left; pay with x402') } : { resp: json({ error: 'a watch needs 2 receipts, only 1 left' }, 402) }; }
+    }
+    if (p1) return { paid_with: p1, accountId: a.id };
+    return cfg ? { resp: await x402.paymentRequired(cfg, kind, resourceUrl, 'no free receipts or points left; pay with x402') } : { resp: json({ error: 'no free receipts or points left today' }, 402) };
+  }
+  if (cfg) return { resp: await x402.paymentRequired(cfg, kind, resourceUrl, 'PAYMENT-SIGNATURE header is required (or use an API key)') };
+  return { resp: json({ error: 'invalid api key' }, 401) };
+}
+const withSettle = (resp, h) => { if (h) resp.headers.set('PAYMENT-RESPONSE', h); resp.headers.set('access-control-expose-headers', 'PAYMENT-RESPONSE'); return resp; };
+
 export default {
   async scheduled(event, env, ctx) {
     ctx.waitUntil(processDueWatches(env));
@@ -96,6 +123,7 @@ export default {
       if (req.method === 'GET' && url.pathname === '/v1/info') {
         const n = (await env.DB.prepare('SELECT COUNT(*) AS n FROM accounts').first()).n;
         return json({ service: 'agent-receipts', version: '0.1.0', runtime: 'cloudflare-workers', key_id: await keyId(k.publicKey), checks: Object.keys(CHECKS), free_per_day: FREE_PER_DAY,
+          payments: (() => { const c = x402.config(env); return c ? { protocol: 'x402 v2', network: c.network, asset: c.asset, pay_to: c.payTo, prices_usd: x402.PRICES_USD, note: 'Devnet unless network says mainnet. Pay with PAYMENT-SIGNATURE, no account needed.' } : { enabled: false }; })(),
           early_program: { limit: earlyLimit, points_each: EARLY_POINTS, taken: n, open: n < earlyLimit, note: 'Points are non-transferable credits for receipts. Not a token.' } });
       }
       if (req.method === 'GET' && url.pathname === '/.well-known/receipt-key') {
@@ -119,44 +147,41 @@ export default {
       }
       if (req.method === 'POST' && url.pathname === '/v1/verify') {
         const a = await accountFor(env, req);
-        if (!a) return json({ error: 'invalid api key' }, 401);
         if (await limited(env, ip, 'v', 60, 60_000)) return json({ error: 'rate limit' }, 429);
         const body = await req.json().catch(() => null);
         if (!body || !CHECKS[body.check]) return json({ error: 'unknown check', available: Object.keys(CHECKS) }, 400);
-        const paid_with = await charge(env, a);
-        if (!paid_with) return json({ error: 'no free receipts or points left today' }, 402);
-        const receipt = await runAndSign(env, k, a.id, { check: body.check, params: body.params, claim: body.claim, paid_with }, allowPrivate);
-        return json({ receipt, verify_url: `/v1/receipts/${receipt.id}` });
+        const pay = await payFor(env, req, a, 'verify', x402.config(env));
+        if (pay.resp) return pay.resp;
+        const receipt = await runAndSign(env, k, pay.accountId, { check: body.check, params: body.params, claim: body.claim, paid_with: pay.paid_with, extra: pay.payment ? { payment: pay.payment } : {} }, allowPrivate);
+        return withSettle(json({ receipt, verify_url: `/v1/receipts/${receipt.id}` }), pay.settleHeader);
       }
       let m;
       if (req.method === 'GET' && url.pathname === '/v1/methodology') return json({ methods: METHODS, note: 'Receipt fields: observed = raw evidence, fingerprint = sha256 of observed (no timestamps), at = UTC time of the check, duration_ms, method = the method entry used.' });
       if (req.method === 'POST' && url.pathname === '/v1/watches') {
         const a = await accountFor(env, req);
-        if (!a) return json({ error: 'invalid api key' }, 401);
         if (await limited(env, ip, 'w', 20, 60_000)) return json({ error: 'rate limit' }, 429);
         const body = await req.json().catch(() => null);
         const mins = Number(body && body.recheck_after_minutes);
         if (!body || !CHECKS[body.check]) return json({ error: 'unknown check', available: Object.keys(CHECKS) }, 400);
         if (!Number.isInteger(mins) || mins < 5 || mins > 1440) return json({ error: 'recheck_after_minutes must be an integer from 5 to 1440' }, 400);
-        const open = (await env.DB.prepare("SELECT COUNT(*) AS n FROM watches WHERE account_id=? AND status IN ('pending','running')").bind(a.id).first()).n;
-        if (open >= 20) return json({ error: 'too many open watches (max 20)' }, 429);
-        // A watch costs two receipts: baseline now, recheck later. Both are paid up front.
-        const p1 = await charge(env, a);
-        if (!p1) return json({ error: 'a watch needs 2 receipts and none are left' }, 402);
-        const p2 = await charge(env, a);
-        if (!p2) { await refund(env, a.key_hash, p1); return json({ error: 'a watch needs 2 receipts, only 1 left' }, 402); }
-        const baseline = await runAndSign(env, k, a.id, { check: body.check, params: body.params, claim: body.claim, paid_with: p1, extra: { watch_role: 'baseline' } }, allowPrivate);
-        const id = 'watch_' + [...crypto.getRandomValues(new Uint8Array(6))].map((b) => b.toString(16).padStart(2, '0')).join('');
+        const owner = a ? a.id : 'anon';
+        const open = (await env.DB.prepare("SELECT COUNT(*) AS n FROM watches WHERE account_id=? AND status IN ('pending','running')").bind(owner).first()).n;
+        if (open >= (a ? 20 : 500)) return json({ error: 'too many open watches' }, 429);
+        // A watch is paid once up front: 2 receipts of credit, or one x402 payment at the watch price.
+        const pay = await payFor(env, req, a, 'watch', x402.config(env), 2);
+        if (pay.resp) return pay.resp;
+        const baseline = await runAndSign(env, k, pay.accountId, { check: body.check, params: body.params, claim: body.claim, paid_with: pay.paid_with, extra: { watch_role: 'baseline', ...(pay.payment ? { payment: pay.payment } : {}) } }, allowPrivate);
+        const id = 'watch_' + [...crypto.getRandomValues(new Uint8Array(12))].map((b) => b.toString(16).padStart(2, '0')).join('');
         const dueAt = new Date(Date.now() + mins * 60_000).toISOString();
         await env.DB.prepare('INSERT INTO watches (id, account_id, check_kind, params, claim, after_minutes, due_at, baseline_receipt, baseline_fp, status, created) VALUES (?,?,?,?,?,?,?,?,?,?,?)')
-          .bind(id, a.id, body.check, JSON.stringify(body.params || {}), String(body.claim || '').slice(0, 300), mins, dueAt, baseline.id, baseline.fingerprint, 'pending', new Date().toISOString()).run();
-        return json({ watch: id, status: 'pending', recheck_at: dueAt, baseline }, 201);
+          .bind(id, owner, body.check, JSON.stringify(body.params || {}), String(body.claim || '').slice(0, 300), mins, dueAt, baseline.id, baseline.fingerprint, 'pending', new Date().toISOString()).run();
+        return withSettle(json({ watch: id, status: 'pending', recheck_at: dueAt, baseline, status_url: `/v1/watches/${id}` }, 201), pay.settleHeader);
       }
       if (req.method === 'GET' && (m = url.pathname.match(/^\/v1\/watches\/(watch_[a-f0-9]+)$/))) {
         const a = await accountFor(env, req);
-        if (!a) return json({ error: 'invalid api key' }, 401);
-        const w = await env.DB.prepare('SELECT * FROM watches WHERE id=? AND account_id=?').bind(m[1], a.id).first();
-        if (!w) return json({ error: 'not found' }, 404);
+        const w = await env.DB.prepare('SELECT * FROM watches WHERE id=?').bind(m[1]).first();
+        // Anonymous (x402-paid) watches are readable by whoever holds the unguessable id.
+        if (!w || (w.account_id !== 'anon' && (!a || a.id !== w.account_id))) return json({ error: a || w ? 'not found' : 'not found' }, 404);
         const out = { watch: w.id, status: w.status, check: w.check_kind, claim: w.claim, recheck_at: w.due_at, baseline_receipt: w.baseline_receipt };
         if (w.status === 'done') {
           const row = await env.DB.prepare('SELECT body FROM receipts WHERE id=?').bind(w.result_receipt).first();

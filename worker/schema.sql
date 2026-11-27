@@ -14,3 +14,6 @@ CREATE TABLE IF NOT EXISTS watches (
   status TEXT NOT NULL, result_receipt TEXT, drift INTEGER, created TEXT, done_at TEXT
 );
 CREATE INDEX IF NOT EXISTS watches_due ON watches(status, due_at);
+CREATE TABLE IF NOT EXISTS payments (
+  tx TEXT PRIMARY KEY, payer TEXT, network TEXT, asset TEXT, amount TEXT, kind TEXT, account_id TEXT, at TEXT
+);

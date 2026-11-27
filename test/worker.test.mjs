@@ -37,9 +37,12 @@ const pem = publicKey.export({ type: 'spki', format: 'pem' });
 const runCron = async (e) => { let p; await worker.scheduled({}, e, { waitUntil: (x) => { p = x; } }); await p; };
 const realFetch = globalThis.fetch;
 test.before(() => {
-  globalThis.fetch = async (u) => {
+  globalThis.fetch = async (u, init) => {
     if (String(u) === 'https://site.test/') return new Response(globalThis.__page || 'hello deployed page', { status: 200, headers: { 'content-type': 'text/html', etag: 'abc' } });
     if (String(u) === 'https://site.test/missing') return new Response('no', { status: 404 });
+    if (String(u) === 'https://fac.test/supported') return Response.json({ kinds: [{ x402Version: 2, scheme: 'exact', network: 'solana:EtWTRABZaYq6iMfeYKouRu166VU2xqa1', extra: { feePayer: 'FeePayer1111111111111111111111111111111111' } }] });
+    if (String(u) === 'https://fac.test/verify') { globalThis.__fac.push(['verify', JSON.parse(init.body)]); return Response.json(globalThis.__facOk === false ? { isValid: false, invalidReason: 'insufficient_funds' } : { isValid: true, payer: 'PayerWallet' }); }
+    if (String(u) === 'https://fac.test/settle') { globalThis.__fac.push(['settle', JSON.parse(init.body)]); return Response.json({ success: true, payer: 'PayerWallet', transaction: 'TX' + (globalThis.__fac.length), network: 'solana:EtWTRABZaYq6iMfeYKouRu166VU2xqa1' }); }
     if (String(u) === 'https://other.workers.dev/') return new Response('error code: 1042\n', { status: 404 });
     return new Response('x', { status: 500 });
   };
@@ -159,4 +162,70 @@ test('workers.dev target gives an explicit error, not a fake 404 verdict', async
   const r = (await call(e, '/v1/verify', { method: 'POST', key: body.api_key, body: { check: 'http_status', params: { url: 'https://other.workers.dev/' } } })).body.receipt;
   assert.equal(r.passed, false);
   assert.match(r.error, /1042/);
+});
+
+const b64 = (o) => Buffer.from(JSON.stringify(o)).toString('base64');
+const payEnv = () => ({ ...env(), PAY_TO: 'ARcYk3J3iBnJZMduVevMS7jsYh7puQtXH9WN8FtAjAbJ', FACILITATOR_URL: 'https://fac.test' });
+const raw = (e, path, { method = 'POST', body, key, pay } = {}) => worker.fetch(new Request('https://ar.test' + path, { method, body: JSON.stringify(body), headers: { ...(key ? { authorization: 'Bearer ' + key } : {}), ...(pay ? { 'payment-signature': pay } : {}), 'cf-connecting-ip': '5.6.7.8' } }), e);
+const vbody = { check: 'http_status', claim: 'up', params: { url: 'https://site.test/' } };
+const goodPay = (amount) => b64({ x402Version: 2, accepted: { scheme: 'exact', network: 'solana:EtWTRABZaYq6iMfeYKouRu166VU2xqa1', amount, asset: '4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU', payTo: 'ARcYk3J3iBnJZMduVevMS7jsYh7puQtXH9WN8FtAjAbJ' }, payload: { transaction: 'abc' } });
+
+test('x402: anonymous call gets a V2 402 with our price and public address only', async () => {
+  const e = payEnv(); globalThis.__fac = [];
+  const r = await raw(e, '/v1/verify', { body: vbody });
+  assert.equal(r.status, 402);
+  const pr = JSON.parse(Buffer.from(r.headers.get('payment-required'), 'base64').toString());
+  assert.equal(pr.x402Version, 2);
+  assert.equal(pr.accepts[0].amount, '20000');
+  assert.equal(pr.accepts[0].payTo, 'ARcYk3J3iBnJZMduVevMS7jsYh7puQtXH9WN8FtAjAbJ');
+  assert.equal(pr.accepts[0].extra.feePayer, 'FeePayer1111111111111111111111111111111111');
+});
+
+test('x402: paid call verifies, settles, then returns a receipt that records the payment', async () => {
+  const e = payEnv(); globalThis.__fac = []; globalThis.__facOk = true;
+  const r = await raw(e, '/v1/verify', { body: vbody, pay: goodPay('20000') });
+  assert.equal(r.status, 200);
+  const j = await r.json();
+  assert.equal(j.receipt.paid_with, 'x402');
+  assert.equal(j.receipt.payment.usd, '0.02');
+  assert.ok(j.receipt.payment.transaction.startsWith('TX'));
+  assert.deepEqual(globalThis.__fac.map((x) => x[0]), ['verify', 'settle']);
+  assert.ok(r.headers.get('payment-response'));
+  assert.equal(verifyNode(j.receipt, pem).valid, true);
+});
+
+test('x402: wrong amount is rejected before the facilitator is called; failed verify never settles', async () => {
+  const e = payEnv(); globalThis.__fac = [];
+  const cheap = await raw(e, '/v1/verify', { body: vbody, pay: goodPay('1') });
+  assert.equal(cheap.status, 402);
+  assert.equal(globalThis.__fac.length, 0);
+  globalThis.__facOk = false;
+  const bad = await raw(e, '/v1/verify', { body: vbody, pay: goodPay('20000') });
+  assert.equal(bad.status, 402);
+  assert.deepEqual(globalThis.__fac.map((x) => x[0]), ['verify']);
+  globalThis.__facOk = true;
+});
+
+test('x402: watch costs 0.05, anonymous watch is readable by its id', async () => {
+  const e = payEnv(); globalThis.__fac = []; globalThis.__facOk = true;
+  const wb = { check: 'http_status', params: { url: 'https://site.test/' }, recheck_after_minutes: 5 };
+  assert.equal((await raw(e, '/v1/watches', { body: wb })).status, 402);
+  assert.equal((await raw(e, '/v1/watches', { body: wb, pay: goodPay('20000') })).status, 402);
+  const ok = await raw(e, '/v1/watches', { body: wb, pay: goodPay('50000') });
+  assert.equal(ok.status, 201);
+  const j = await ok.json();
+  assert.equal(j.baseline.payment.usd, '0.05');
+  const st = await raw(e, '/v1/watches/' + j.watch, { method: 'GET' });
+  assert.equal((await st.json()).status, 'pending');
+});
+
+test('x402: account with credit still uses free quota first; out of credit gets 402 with x402 offer', async () => {
+  const e = payEnv();
+  const { body } = await call(e, '/v1/accounts', { method: 'POST', body: {} });
+  const first = await raw(e, '/v1/verify', { body: vbody, key: body.api_key });
+  assert.equal((await first.json()).receipt.paid_with, 'free');
+  e.DB._db.exec("UPDATE accounts SET points=0, used_today=5, day='" + new Date().toISOString().slice(0, 10) + "'");
+  const none = await raw(e, '/v1/verify', { body: vbody, key: body.api_key });
+  assert.equal(none.status, 402);
+  assert.ok(none.headers.get('payment-required'));
 });

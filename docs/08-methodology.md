@@ -9,6 +9,7 @@ Every receipt says how it was produced, so an owner can repeat the check without
 | `at` | UTC time the check ran |
 | `duration_ms` | How long the check took |
 | `observed` | The raw evidence (below). Not just pass or fail |
+| `observed.source_time` | `fetched_at` (our clock at response), plus the source's own `date`, `last_modified`, `age`, `expires` exactly as sent (null if absent) and `skew_seconds` (our fetch time minus its Date). The source's times are its claims, not verified time. Signed with the receipt, left out of the fingerprint |
 | `fingerprint` | sha256 of the stable part of `observed` (no timestamps, no headers, no excerpt). Same content, same fingerprint |
 | `method` | Name, version, summary and a reproduce command for the check used |
 | `prev`, `id`, `sig`, `kid` | Hash chain, content id, Ed25519 signature, key id |
@@ -34,3 +35,7 @@ One witness location (Cloudflare edge). Targets hosted on `*.workers.dev` cannot
 ## Persistence watches
 
 `POST /v1/watches` with `{check, params, claim, recheck_after_minutes}` (5 to 1440). Runs the check now (baseline receipt), then again after N minutes (recheck receipt, checked by a 5-minute cron, so up to about 5 minutes late). `GET /v1/watches/:id` returns the verdict: `drift: true` when the recheck fingerprint differs from the baseline. A page that still passes but changed content is reported as drift. Cost: 2 receipts, paid up front. Max 20 open watches per account.
+
+
+## Scope limit
+Receipts attest to public, independently fetchable facts: an HTTP response, a JSON field, a content hash, a DNS record, as seen from our fetcher at the stated time. They cannot attest to counterparty claims such as "payment sent", "email delivered" or "order shipped" unless that fact is itself published at a public URL we can fetch. Anything behind a login or private to one party is out of scope.

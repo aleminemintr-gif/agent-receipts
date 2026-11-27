@@ -65,7 +65,7 @@ async function refund(env, keyHash, paidWith) {
 // Volatile fields (headers, excerpt, redirect count) stay in the receipt as evidence but are left out
 // of the fingerprint: servers rewrite last-modified/date-like headers without the content changing.
 const fingerprint = (observed, error) => {
-  const { headers, redirects, body_excerpt, body_bytes, ...stable } = observed || {};
+  const { headers, source_time, redirects, body_excerpt, body_bytes, ...stable } = observed || {};
   return sha256(canonical({ observed: observed ? stable : null, error: error ? 'error' : null }));
 };
 

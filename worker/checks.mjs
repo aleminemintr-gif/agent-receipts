@@ -51,15 +51,24 @@ async function fetchFollow(urlStr, allowPrivate) {
       throw new Error('cannot check: target is a Cloudflare Worker on workers.dev, which Cloudflare blocks from other Workers (error 1042). Use a custom domain or another host.');
     }
     const hdr = {};
-    for (const h of ['content-type', 'content-length', 'etag', 'last-modified', 'cache-control', 'server']) if (res.headers.get(h)) hdr[h] = res.headers.get(h);
-    return { status: res.status, body: await readCapped(res), finalUrl: cur, headers: hdr, hops: i };
+    for (const h of ['content-type', 'content-length', 'etag', 'last-modified', 'date', 'age', 'expires', 'cache-control', 'server']) if (res.headers.get(h)) hdr[h] = res.headers.get(h);
+    const fetchedAt = new Date().toISOString();
+    return { status: res.status, body: await readCapped(res), finalUrl: cur, headers: hdr, hops: i, fetchedAt };
   }
   throw new Error('too many redirects');
 }
 const getPath = (obj, path) => path.split('.').reduce((o, k) => (o == null ? undefined : o[k]), obj);
 const text = (b) => new TextDecoder().decode(b);
 // Raw evidence block shared by every HTTP check: enough to reproduce and audit.
-const raw = (r) => ({ status: r.status, final_url: r.finalUrl, redirects: r.hops, headers: r.headers, body_bytes: r.body.length, body_excerpt: text(r.body.slice(0, 300)) });
+// The source's own clock, pinned next to ours. Values are exactly what the server sent (null if absent);
+// they are the server's claims, not verified time. skew_seconds = our fetch time minus the server Date header.
+const sourceTime = (r) => {
+  const h = r.headers || {};
+  const d = h.date ? Date.parse(h.date) : NaN;
+  return { fetched_at: r.fetchedAt, date: h.date ?? null, last_modified: h['last-modified'] ?? null, age: h.age ?? null, expires: h.expires ?? null,
+    skew_seconds: Number.isNaN(d) ? null : Math.round((Date.parse(r.fetchedAt) - d) / 1000) };
+};
+const raw = (r) => ({ status: r.status, final_url: r.finalUrl, redirects: r.hops, headers: r.headers, source_time: sourceTime(r), body_bytes: r.body.length, body_excerpt: text(r.body.slice(0, 300)) });
 
 export const METHODS = {
   http_status: { version: 1, summary: 'One GET from a Cloudflare Worker (public internet, no cookies). Redirects followed manually, max 4, each hop re-checked against the private-address guard. Passes when the final status equals expect_status (default 200).', reproduce: 'curl -sL -o /dev/null -w "%{http_code}" URL' },

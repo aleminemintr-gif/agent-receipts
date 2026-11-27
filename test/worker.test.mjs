@@ -53,7 +53,7 @@ const runCron = async (e) => { let p; await worker.scheduled({}, e, { waitUntil:
 const realFetch = globalThis.fetch;
 test.before(() => {
   globalThis.fetch = async (u, init) => {
-    if (String(u) === 'https://site.test/') return new Response(globalThis.__page || 'hello deployed page', { status: 200, headers: { 'content-type': 'text/html', etag: 'abc', 'last-modified': globalThis.__lm || 'x' } });
+    if (String(u) === 'https://site.test/') return new Response(globalThis.__page || 'hello deployed page', { status: 200, headers: { 'content-type': 'text/html', etag: 'abc', 'last-modified': globalThis.__lm || 'x', date: 'Fri, 27 Nov 2026 19:00:00 GMT' } });
     if (String(u) === 'https://site.test/missing') return new Response('no', { status: 404 });
     if (String(u) === 'https://fac.test/supported') return Response.json({ kinds: [{ x402Version: 2, scheme: 'exact', network: 'solana:EtWTRABZaYq6iMfeYKouRu166VU2xqa1', extra: { feePayer: 'FeePayer1111111111111111111111111111111111' } }] });
     if (String(u) === 'https://fac.test/verify') { globalThis.__fac.push(['verify', JSON.parse(init.body)]); return Response.json(globalThis.__facOk === false ? { isValid: false, invalidReason: 'insufficient_funds' } : { isValid: true, payer: 'PayerWallet' }); }
@@ -165,6 +165,18 @@ test('watch: baseline now, recheck after N minutes, drift detected', async () =>
   const other = await call(e, '/v1/accounts', { method: 'POST', body: {} });
   assert.equal((await call(e, '/v1/watches/' + id, { key: other.body.api_key })).status, 404);
   delete globalThis.__page;
+});
+
+test('receipt pins fetch time and the source clock (Date, Last-Modified) inside the signed body', async () => {
+  const e = env();
+  const { body } = await call(e, '/v1/accounts', { method: 'POST', body: {} });
+  const r = (await call(e, '/v1/verify', { method: 'POST', key: body.api_key, body: { check: 'http_status', params: { url: 'https://site.test/' } } })).body.receipt;
+  const st = r.observed.source_time;
+  assert.equal(st.date, 'Fri, 27 Nov 2026 19:00:00 GMT');
+  assert.ok(st.last_modified);
+  assert.ok(!Number.isNaN(Date.parse(st.fetched_at)));
+  assert.equal(typeof st.skew_seconds, 'number');
+  assert.equal(r.observed.headers.date, st.date);
 });
 
 test('fingerprint ignores volatile headers but still catches content change', async () => {

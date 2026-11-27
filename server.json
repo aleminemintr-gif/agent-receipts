@@ -2,8 +2,16 @@
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
   "name": "io.github.aleminemintr-gif/agent-receipts",
   "title": "agent-receipts",
-  "description": "Independent post-action verification for AI agents: check a public fact and get an Ed25519-signed receipt. Public facts only.",
-  "repository": { "url": "https://github.com/aleminemintr-gif/agent-receipts", "source": "github" },
+  "description": "Post-action verification for AI agents: checks a public fact, returns a signed receipt.",
+  "repository": {
+    "url": "https://github.com/aleminemintr-gif/agent-receipts",
+    "source": "github"
+  },
   "version": "0.1.0",
-  "remotes": [ { "type": "streamable-http", "url": "https://agent-receipts.amin-experiments.workers.dev/mcp" } ]
+  "remotes": [
+    {
+      "type": "streamable-http",
+      "url": "https://agent-receipts.amin-experiments.workers.dev/mcp"
+    }
+  ]
 }

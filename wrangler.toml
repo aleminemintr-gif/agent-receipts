@@ -10,3 +10,6 @@ binding = "ASSETS"
 binding = "DB"
 database_name = "agent-receipts"
 database_id = "c15ed64c-9958-4baa-aec2-a0a4bb52cc92"
+
+[triggers]
+crons = ["*/5 * * * *"]

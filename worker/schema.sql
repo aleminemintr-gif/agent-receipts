@@ -8,3 +8,9 @@ CREATE TABLE IF NOT EXISTS receipts (
 );
 CREATE TABLE IF NOT EXISTS hits (k TEXT NOT NULL, ts INTEGER NOT NULL);
 CREATE INDEX IF NOT EXISTS hits_k ON hits(k, ts);
+CREATE TABLE IF NOT EXISTS watches (
+  id TEXT PRIMARY KEY, account_id TEXT NOT NULL, check_kind TEXT NOT NULL, params TEXT NOT NULL, claim TEXT,
+  after_minutes INTEGER NOT NULL, due_at TEXT NOT NULL, baseline_receipt TEXT NOT NULL, baseline_fp TEXT NOT NULL,
+  status TEXT NOT NULL, result_receipt TEXT, drift INTEGER, created TEXT, done_at TEXT
+);
+CREATE INDEX IF NOT EXISTS watches_due ON watches(status, due_at);

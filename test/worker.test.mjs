@@ -38,7 +38,7 @@ const runCron = async (e) => { let p; await worker.scheduled({}, e, { waitUntil:
 const realFetch = globalThis.fetch;
 test.before(() => {
   globalThis.fetch = async (u, init) => {
-    if (String(u) === 'https://site.test/') return new Response(globalThis.__page || 'hello deployed page', { status: 200, headers: { 'content-type': 'text/html', etag: 'abc' } });
+    if (String(u) === 'https://site.test/') return new Response(globalThis.__page || 'hello deployed page', { status: 200, headers: { 'content-type': 'text/html', etag: 'abc', 'last-modified': globalThis.__lm || 'x' } });
     if (String(u) === 'https://site.test/missing') return new Response('no', { status: 404 });
     if (String(u) === 'https://fac.test/supported') return Response.json({ kinds: [{ x402Version: 2, scheme: 'exact', network: 'solana:EtWTRABZaYq6iMfeYKouRu166VU2xqa1', extra: { feePayer: 'FeePayer1111111111111111111111111111111111' } }] });
     if (String(u) === 'https://fac.test/verify') { globalThis.__fac.push(['verify', JSON.parse(init.body)]); return Response.json(globalThis.__facOk === false ? { isValid: false, invalidReason: 'insufficient_funds' } : { isValid: true, payer: 'PayerWallet' }); }
@@ -145,6 +145,17 @@ test('watch: baseline now, recheck after N minutes, drift detected', async () =>
   const other = await call(e, '/v1/accounts', { method: 'POST', body: {} });
   assert.equal((await call(e, '/v1/watches/' + id, { key: other.body.api_key })).status, 404);
   delete globalThis.__page;
+});
+
+test('fingerprint ignores volatile headers but still catches content change', async () => {
+  const e = env();
+  const { body } = await call(e, '/v1/accounts', { method: 'POST', body: {} });
+  const run = async (hdr, page) => { globalThis.__page = page; globalThis.__lm = hdr;
+    return (await call(e, '/v1/verify', { method: 'POST', key: body.api_key, body: { check: 'http_contains', params: { url: 'https://site.test/', text: 'v' } } })).body.receipt.fingerprint; };
+  const a = await run('one', 'v1'); const b = await run('two', 'v1'); const c = await run('two', 'v2');
+  assert.equal(a, b);
+  assert.notEqual(b, c);
+  delete globalThis.__page; delete globalThis.__lm;
 });
 
 test('watch: needs two receipts, refunds the first if the second is missing', async () => {

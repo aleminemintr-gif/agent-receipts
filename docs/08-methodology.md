@@ -9,7 +9,7 @@ Every receipt says how it was produced, so an owner can repeat the check without
 | `at` | UTC time the check ran |
 | `duration_ms` | How long the check took |
 | `observed` | The raw evidence (below). Not just pass or fail |
-| `fingerprint` | sha256 of `observed` (no timestamps). Same world, same fingerprint |
+| `fingerprint` | sha256 of the stable part of `observed` (no timestamps, no headers, no excerpt). Same content, same fingerprint |
 | `method` | Name, version, summary and a reproduce command for the check used |
 | `prev`, `id`, `sig`, `kid` | Hash chain, content id, Ed25519 signature, key id |
 

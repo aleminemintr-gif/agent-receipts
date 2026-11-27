@@ -49,7 +49,12 @@ async function refund(env, keyHash, paidWith) {
   else if (paidWith === 'point') await env.DB.prepare('UPDATE accounts SET points=points+1, total_receipts=total_receipts-1 WHERE key_hash=?').bind(keyHash).run();
 }
 // Fingerprint = hash of the observation only (no timestamps), so equal world => equal fingerprint.
-const fingerprint = (observed, error) => sha256(canonical({ observed, error: error ? 'error' : null }));
+// Volatile fields (headers, excerpt, redirect count) stay in the receipt as evidence but are left out
+// of the fingerprint: servers rewrite last-modified/date-like headers without the content changing.
+const fingerprint = (observed, error) => {
+  const { headers, redirects, body_excerpt, body_bytes, ...stable } = observed || {};
+  return sha256(canonical({ observed: observed ? stable : null, error: error ? 'error' : null }));
+};
 
 async function runAndSign(env, k, accountId, { check, params, claim, paid_with, extra = {} }, allowPrivate) {
   const result = await runCheck(check, params, allowPrivate);

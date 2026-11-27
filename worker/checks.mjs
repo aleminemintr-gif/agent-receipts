@@ -47,6 +47,9 @@ async function fetchFollow(urlStr, allowPrivate) {
       cur = new URL(res.headers.get('location'), cur).toString();
       continue;
     }
+    if (res.status === 404 && /^error code: 1042/.test(await res.clone().text().catch(() => ''))) {
+      throw new Error('cannot check: target is a Cloudflare Worker on workers.dev, which Cloudflare blocks from other Workers (error 1042). Use a custom domain or another host.');
+    }
     const hdr = {};
     for (const h of ['content-type', 'content-length', 'etag', 'last-modified', 'cache-control', 'server']) if (res.headers.get(h)) hdr[h] = res.headers.get(h);
     return { status: res.status, body: await readCapped(res), finalUrl: cur, headers: hdr, hops: i };

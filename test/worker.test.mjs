@@ -40,6 +40,7 @@ test.before(() => {
   globalThis.fetch = async (u) => {
     if (String(u) === 'https://site.test/') return new Response(globalThis.__page || 'hello deployed page', { status: 200, headers: { 'content-type': 'text/html', etag: 'abc' } });
     if (String(u) === 'https://site.test/missing') return new Response('no', { status: 404 });
+    if (String(u) === 'https://other.workers.dev/') return new Response('error code: 1042\n', { status: 404 });
     return new Response('x', { status: 500 });
   };
 });
@@ -150,4 +151,12 @@ test('watch: needs two receipts, refunds the first if the second is missing', as
   const r = await call(e, '/v1/watches', { method: 'POST', key: body.api_key, body: { check: 'http_status', params: { url: 'https://site.test/' }, recheck_after_minutes: 5 } });
   assert.equal(r.status, 402);
   assert.equal((await call(e, '/v1/me', { key: body.api_key })).body.free_left_today, 1);
+});
+
+test('workers.dev target gives an explicit error, not a fake 404 verdict', async () => {
+  const e = env();
+  const { body } = await call(e, '/v1/accounts', { method: 'POST', body: {} });
+  const r = (await call(e, '/v1/verify', { method: 'POST', key: body.api_key, body: { check: 'http_status', params: { url: 'https://other.workers.dev/' } } })).body.receipt;
+  assert.equal(r.passed, false);
+  assert.match(r.error, /1042/);
 });

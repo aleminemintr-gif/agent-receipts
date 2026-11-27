@@ -40,7 +40,7 @@ export function verifyBundle(bundle, receipt, pem) {
   add('receipt hashes to the Merkle leaf', leaf === bundle.leaf);
   const root = foldProof(leaf, bundle.path || []);
   add('audit path folds to the published root', root === bundle.root.root, root.slice(0, 16) + '...');
-  const { sig: rsig, ...stmt } = bundle.root;
+  const { sig: rsig, anchor: _anchor, ...stmt } = bundle.root; // anchor info is added by the server after signing
   let s2 = false; try { s2 = sigOk(stmt, rsig, pem); } catch {}
   add('daily root statement signed by the same key', s2, `day ${stmt.day}, ${stmt.tree_size} receipts`);
   add('receipt belongs to that day', String(r.at).slice(0, 10) === stmt.day);

@@ -4,6 +4,9 @@ import fs from 'node:fs';
 import { DatabaseSync } from 'node:sqlite';
 import { generateKeyPairSync } from 'node:crypto';
 import worker from '../worker/index.mjs';
+import * as tlog from '../worker/log.mjs';
+import { importPrivate, publicFromPrivate } from '../worker/receipt-web.mjs';
+import { verifyBundle } from '../verifier/verify.mjs';
 import { verifyReceipt as verifyNode, sha256 as nodeSha } from '../src/receipt.mjs';
 
 // Minimal D1 stand-in over node:sqlite.
@@ -43,6 +46,11 @@ test.before(() => {
     if (String(u) === 'https://fac.test/supported') return Response.json({ kinds: [{ x402Version: 2, scheme: 'exact', network: 'solana:EtWTRABZaYq6iMfeYKouRu166VU2xqa1', extra: { feePayer: 'FeePayer1111111111111111111111111111111111' } }] });
     if (String(u) === 'https://fac.test/verify') { globalThis.__fac.push(['verify', JSON.parse(init.body)]); return Response.json(globalThis.__facOk === false ? { isValid: false, invalidReason: 'insufficient_funds' } : { isValid: true, payer: 'PayerWallet' }); }
     if (String(u) === 'https://fac.test/settle') { globalThis.__fac.push(['settle', JSON.parse(init.body)]); return Response.json({ success: true, payer: 'PayerWallet', transaction: 'TX' + (globalThis.__fac.length), network: 'solana:EtWTRABZaYq6iMfeYKouRu166VU2xqa1' }); }
+    if (String(u) === 'https://rpc.test/') {
+      const sig = JSON.parse(init.body).params[0];
+      if (sig !== '5'.repeat(88)) return Response.json({ result: null });
+      return Response.json({ result: { meta: { err: null }, blockTime: 1800000000, transaction: { message: { instructions: [{ program: 'spl-memo', programId: 'MemoSq4gqABAXKb96qnH8TysNcWxMyWCqXgDLGmfcHr', parsed: globalThis.__memo }] } } } });
+    }
     if (String(u) === 'https://other.workers.dev/') return new Response('error code: 1042\n', { status: 404 });
     return new Response('x', { status: 500 });
   };
@@ -239,4 +247,73 @@ test('x402: account with credit still uses free quota first; out of credit gets 
   const none = await raw(e, '/v1/verify', { body: vbody, key: body.api_key });
   assert.equal(none.status, 402);
   assert.ok(none.headers.get('payment-required'));
+});
+
+async function sealedEnv(n = 5) {
+  const e = { ...env(), SOLANA_RPC: 'https://rpc.test/' };
+  const { body } = await call(e, '/v1/accounts', { method: 'POST', body: {} });
+  const ids = [];
+  for (let i = 0; i < n; i++) ids.push((await call(e, '/v1/verify', { method: 'POST', key: body.api_key, body: { check: 'http_status', claim: 'c' + i, params: { url: 'https://site.test/' } } })).body.receipt.id);
+  const priv = await importPrivate(e.SIGNING_KEY_PKCS8_B64);
+  const keys = { privateKey: priv, publicKey: await publicFromPrivate(priv) };
+  const sealed = await tlog.closeDays(e, keys, Date.now() + 2 * 86400_000);
+  return { e, ids, sealed };
+}
+
+test('log: day is sealed, public log shows commitments only, proof verifies offline', async () => {
+  const { e, ids, sealed } = await sealedEnv(5);
+  assert.equal(sealed.length, 1);
+  const log = (await call(e, '/v1/log')).body;
+  assert.equal(log.entries.length, 5);
+  assert.equal(log.entries[1].prev, log.entries[0].id);
+  assert.ok(!('params' in log.entries[0]) && !('claim' in log.entries[0]), 'no receipt contents in the public log');
+  const roots = (await call(e, '/v1/roots')).body.roots;
+  assert.equal(roots[0].tree_size, 5);
+  for (const id of ids) {
+    const b = (await call(e, '/v1/proof/' + id + '?include=receipt')).body;
+    const checks = verifyBundle(b, null, pem);
+    assert.deepEqual(checks.filter((c) => !c.ok), [], id);
+  }
+  // Tampering is caught by the standalone verifier.
+  const b = (await call(e, '/v1/proof/' + ids[0] + '?include=receipt')).body;
+  const forged = verifyBundle(b, { ...b.receipt, passed: !b.receipt.passed }, pem);
+  assert.ok(forged.some((c) => !c.ok));
+  const badRoot = verifyBundle({ ...b, root: { ...b.root, tree_size: 99 } }, null, pem);
+  assert.ok(badRoot.some((c) => !c.ok && /root statement/.test(c.name)));
+  const wrongKey = verifyBundle(b, null, generateKeyPairSync('ed25519').publicKey.export({ type: 'spki', format: 'pem' }));
+  assert.ok(wrongKey.some((c) => !c.ok));
+});
+
+test('log: unsealed day has no proof; roots chain across days', async () => {
+  const e = env();
+  const { body } = await call(e, '/v1/accounts', { method: 'POST', body: {} });
+  const r = (await call(e, '/v1/verify', { method: 'POST', key: body.api_key, body: { check: 'http_status', params: { url: 'https://site.test/' } } })).body.receipt;
+  assert.equal((await call(e, '/v1/proof/' + r.id)).status, 404);
+  // Second day: move the receipt back a day and add one for 'today'.
+  e.DB._db.exec("UPDATE receipts SET body = json_set(body,'$.at','2026-01-01T10:00:00.000Z')");
+  e.DB._db.exec("UPDATE leaves SET day='2026-01-01'");
+  await call(e, '/v1/verify', { method: 'POST', key: body.api_key, body: { check: 'http_status', params: { url: 'https://site.test/' } } });
+  const priv = await importPrivate(e.SIGNING_KEY_PKCS8_B64);
+  const keys = { privateKey: priv, publicKey: await publicFromPrivate(priv) };
+  await tlog.closeDays(e, keys, Date.now() + 2 * 86400_000);
+  const roots = (await call(e, '/v1/roots')).body.roots;
+  assert.equal(roots.length, 2);
+  const [late, early] = roots;
+  assert.equal(early.prev_root, null);
+  assert.equal(late.prev_root, early.root);
+});
+
+test('anchor: accepted only when the chain shows the exact memo; first anchor is kept', async () => {
+  const { e } = await sealedEnv(3);
+  const root = (await call(e, '/v1/roots')).body.roots[0];
+  const sig = '5'.repeat(88);
+  globalThis.__memo = 'agent-receipts:v1:' + root.day + ':' + 'f'.repeat(64);
+  assert.equal((await call(e, `/v1/roots/${root.day}/anchor`, { method: 'POST', body: { signature: 'short' } })).status, 400);
+  const bad = await call(e, `/v1/roots/${root.day}/anchor`, { method: 'POST', body: { signature: sig } });
+  assert.equal(bad.status, 422);
+  globalThis.__memo = 'agent-receipts:v1:' + root.day + ':' + root.root;
+  const ok = await call(e, `/v1/roots/${root.day}/anchor`, { method: 'POST', body: { signature: sig } });
+  assert.equal(ok.status, 200);
+  assert.equal((await call(e, `/v1/roots/${root.day}`)).body.anchor.tx, sig);
+  assert.equal((await call(e, `/v1/roots/${root.day}/anchor`, { method: 'POST', body: { signature: '4'.repeat(88) } })).body.note.includes('first anchor'), true);
 });

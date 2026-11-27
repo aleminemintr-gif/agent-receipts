@@ -29,7 +29,7 @@ Every receipt says how it was produced, so an owner can repeat the check without
 
 ## Limits you should know
 
-One witness location (Cloudflare edge). A site may serve different content to us than to you. Pages that need JavaScript or login are not seen. Body above 1 MB is cut, and the hash then covers the cut body.
+One witness location (Cloudflare edge). Targets hosted on `*.workers.dev` cannot be checked (Cloudflare error 1042); the receipt says so explicitly. A site may serve different content to us than to you. Pages that need JavaScript or login are not seen. Body above 1 MB is cut, and the hash then covers the cut body.
 
 ## Persistence watches
 
